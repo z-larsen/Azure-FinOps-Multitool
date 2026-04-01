@@ -608,26 +608,24 @@ function Populate-GuidanceTab {
     $pctMonthElapsed = [math]::Round(($dayOfMonth / $daysInMonth) * 100, 0)
 
     if ($dayOfMonth -le 3) {
-        $quantify += "[INFO] It is day $dayOfMonth of the billing period ($pctMonthElapsed% elapsed). Forecast data is not yet reliable -- check back after day 5 for meaningful trends."
-        if ($totalActual -gt 0) {
-            $projectedMonthly = [math]::Round($totalActual / $dayOfMonth * $daysInMonth, 2)
-            $quantify += "[INFO] Rough projection based on $dayOfMonth day(s) of data: ~$currency$($projectedMonthly.ToString('N2')) for the full month."
+        $quantify += "[INFO] It is day $dayOfMonth of the billing period ($pctMonthElapsed% elapsed). Forecast comparisons are less meaningful this early in the month."
+        if ($totalForecast -gt 0) {
+            $quantify += "[INFO] Azure Cost Management forecasts $currency$($totalForecast.ToString('N2')) for the full month (MTD actual: $currency$($totalActual.ToString('N2')))."
         }
     }
     elseif ($dayOfMonth -le 7) {
         $quantify += "[INFO] Early in the billing period (day $dayOfMonth, $pctMonthElapsed% elapsed). Forecast accuracy improves after week 1."
-        if ($totalActual -gt 0 -and $totalForecast -gt $totalActual * 1.2) {
-            $increase = [math]::Round((($totalForecast - $totalActual) / $totalActual) * 100, 0)
-            $quantify += "[!] Forecast is $increase% above current spend, but this is expected early in the month as forecast extrapolates from limited data."
+        if ($totalForecast -gt 0) {
+            $quantify += "[INFO] Current forecast: $currency$($totalForecast.ToString('N2')) for the full month (MTD actual: $currency$($totalActual.ToString('N2')))."
         }
     }
     else {
         if ($totalActual -gt 0 -and $totalForecast -gt $totalActual * 1.2) {
             $increase = [math]::Round((($totalForecast - $totalActual) / $totalActual) * 100, 0)
-            $quantify += "[!] Forecast is $increase% above current spend (day $dayOfMonth/$daysInMonth). Review scaling patterns and set up Azure Budgets with alerts."
+            $quantify += "[!] Forecast ($currency$($totalForecast.ToString('N2'))) is $increase% above current MTD spend ($currency$($totalActual.ToString('N2'))) on day $dayOfMonth/$daysInMonth. Review scaling patterns and set up Azure Budgets with alerts."
         }
         elseif ($totalForecast -gt 0) {
-            $quantify += "[OK] Forecast is within 20% of current spend -- costs appear stable this month (day $dayOfMonth/$daysInMonth)."
+            $quantify += "[OK] Forecast ($currency$($totalForecast.ToString('N2'))) is within 20% of current spend -- costs appear stable this month (day $dayOfMonth/$daysInMonth)."
         }
     }
     $quantify += "[TIP] Set Azure Budgets at the subscription or resource group level to get email/action alerts before overspend."

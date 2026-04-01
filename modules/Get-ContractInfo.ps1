@@ -48,19 +48,55 @@ function Get-ContractInfo {
             }
             return $accounts
         }
-
-        return @([PSCustomObject]@{
-            AccountName   = 'Unknown'
-            AgreementType = 'Unknown'
-            FriendlyType  = 'Could not detect (insufficient permissions on billing scope)'
-        })
-
     } catch {
         Write-Warning "Billing account query failed: $($_.Exception.Message)"
-        return @([PSCustomObject]@{
-            AccountName   = 'Unknown'
-            AgreementType = 'Unknown'
-            FriendlyType  = "Error: $($_.Exception.Message)"
-        })
     }
+
+    # Fallback: infer contract type from subscription offer ID (no billing permissions needed)
+    Write-Host "  Attempting contract detection from subscription offer..." -ForegroundColor Cyan
+    try {
+        $subs = @(Get-AzSubscription -ErrorAction SilentlyContinue | Select-Object -First 3)
+        foreach ($sub in $subs) {
+            $subPath = "/subscriptions/$($sub.Id)?api-version=2022-12-01"
+            $subResp = Invoke-AzRestMethod -Path $subPath -Method GET -ErrorAction SilentlyContinue
+            if ($subResp.StatusCode -eq 200) {
+                $subDetail = ($subResp.Content | ConvertFrom-Json)
+                $offerId = $subDetail.properties.subscriptionPolicies.spendingLimit
+                $quotaId = $subDetail.properties.subscriptionPolicies.quotaId
+
+                $inferredType = switch -Regex ($quotaId) {
+                    'EnterpriseAgreement'       { 'Enterprise Agreement (EA)' }
+                    'MCSFree|MSDN|Visual'       { 'Visual Studio / MSDN' }
+                    'PayAsYouGo|PAYG'           { 'Pay-As-You-Go (PAYGO)' }
+                    'Sponsored'                 { 'Azure Sponsored' }
+                    'CSP'                       { 'CSP / Partner Agreement' }
+                    'Internal'                  { 'Microsoft Internal' }
+                    'MCA'                       { 'Microsoft Customer Agreement (MCA)' }
+                    'FreeTrial'                 { 'Free Trial' }
+                    'AAD'                       { 'Azure AD Subscription' }
+                    'MSAZR'                     { 'Pay-As-You-Go (PAYGO)' }
+                    default                     { $quotaId }
+                }
+
+                if ($inferredType) {
+                    return @([PSCustomObject]@{
+                        AccountName   = "Inferred from subscription: $($sub.Name)"
+                        AccountId     = $sub.Id
+                        AgreementType = $quotaId
+                        FriendlyType  = $inferredType
+                        AccountStatus = 'Active'
+                        Currency      = 'Unknown'
+                    })
+                }
+            }
+        }
+    } catch {
+        Write-Warning "Subscription-based contract detection failed: $($_.Exception.Message)"
+    }
+
+    return @([PSCustomObject]@{
+        AccountName   = 'Unknown'
+        AgreementType = 'Unknown'
+        FriendlyType  = 'Could not detect (assign Billing Reader for accurate detection)'
+    })
 }
