@@ -50,7 +50,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'ScanButton', 'ExportButton',
+    'TenantLabel', 'TenantButton', 'ScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
@@ -298,10 +298,12 @@ function Populate-TagsTab {
         # Inventory grid
         $tagRows = @()
         foreach ($entry in $d.Tags.TagNames.GetEnumerator()) {
+            $values = ($entry.Value.Values | ForEach-Object { $_.Value }) -join ', '
             $tagRows += [PSCustomObject]@{
                 'Tag Name'       = $entry.Key
                 'Resources'      = $entry.Value.TotalResources
                 'Unique Values'  = $entry.Value.Values.Count
+                'Values'         = $values
             }
         }
         $script:TagInventoryGrid.ItemsSource = @($tagRows | Sort-Object 'Resources' -Descending)
@@ -617,13 +619,15 @@ function Export-ScanReport {
 # SCAN STAGES (DispatcherTimer-based staged loading)
 ###########################################################################
 $script:scanStages = @(
-    @{ Label = 'Authenticating...';                    Pct = 5;   Action = {
-        $script:scanData.Auth = Initialize-Scanner
+    @{ Label = 'Verifying tenant context...';         Pct = 5;   Action = {
+        if (-not $script:scanData.Auth) {
+            throw "No tenant selected. Click 'Choose Tenant' first."
+        }
         $envLabel = $script:scanData.Auth.Environment
         $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
     }}
     @{ Label = 'Loading management group hierarchy...'; Pct = 15;  Action = {
-        $script:scanData.Hierarchy = Get-TenantHierarchy -TenantId $script:scanData.Auth.TenantId
+        $script:scanData.Hierarchy = Get-TenantHierarchy -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
     }}
     @{ Label = 'Detecting contract type...';           Pct = 25;  Action = {
         $script:scanData.Contract = Get-ContractInfo
@@ -714,9 +718,28 @@ $script:scanTimer.Add_Tick({
 # Scan Button
 $script:ScanButton.Add_Click({
     $script:ScanButton.IsEnabled = $false
+    $script:TenantButton.IsEnabled = $false
     $script:ExportButton.IsEnabled = $false
     $script:currentStage = 0
     $script:scanTimer.Start()
+})
+
+# Choose Tenant Button
+$script:TenantButton.Add_Click({
+    $script:TenantButton.IsEnabled = $false
+    $script:ScanButton.IsEnabled = $false
+    $script:StatusText.Text = 'Choose a tenant...'
+    try {
+        $script:scanData.Auth = Initialize-Scanner -ParentWindow $window
+        $envLabel = $script:scanData.Auth.Environment
+        $subCount = $script:scanData.Auth.Subscriptions.Count
+        $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
+        $script:StatusText.Text = "Connected to $envLabel ($subCount subscriptions). Click 'Scan Tenant' to begin."
+    } catch {
+        $script:StatusText.Text = "Tenant switch failed: $($_.Exception.Message)"
+    }
+    $script:TenantButton.IsEnabled = $true
+    $script:ScanButton.IsEnabled = $true
 })
 
 # Export Button

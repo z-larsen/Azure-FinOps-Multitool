@@ -20,54 +20,108 @@ function Get-ReservationAdvice {
 
     $allRecommendations = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-    foreach ($sub in $Subscriptions) {
-        try {
-            Write-Host "  Scanning reservation/SP recs for $($sub.Name)..." -ForegroundColor Cyan
-            $advPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Advisor/recommendations?api-version=2023-01-01&`$filter=Category eq 'Cost'"
-            $advResp = Invoke-AzRestMethod -Path $advPath -Method GET -ErrorAction Stop
-            $recs = @()
-            if ($advResp.StatusCode -eq 200) {
+    # Build subscription ID list and name lookup
+    $subIds = @($Subscriptions | ForEach-Object { $_.Id })
+    $subNameMap = @{}
+    foreach ($sub in $Subscriptions) { $subNameMap[$sub.Id] = $sub.Name }
+
+    # Query Advisor cost recommendations via Resource Graph (single call)
+    $query = @"
+advisorresources
+| where type == 'microsoft.advisor/recommendations'
+| where properties.category == 'Cost'
+| where properties.shortDescription.problem matches regex '(?i)reserv|savings plan|reserved instance'
+     or properties.shortDescription.solution matches regex '(?i)reserv|savings plan|reserved instance'
+| project subscriptionId,
+    shortDescriptionProblem  = tostring(properties.shortDescription.problem),
+    shortDescriptionSolution = tostring(properties.shortDescription.solution),
+    impact          = tostring(properties.impact),
+    impactedField   = tostring(properties.impactedField),
+    impactedValue   = tostring(properties.impactedValue),
+    annualSavings   = tostring(properties.extendedProperties.annualSavingsAmount),
+    savingsCurrency = tostring(properties.extendedProperties.savingsCurrency),
+    term            = tostring(properties.extendedProperties.term),
+    recName         = name
+"@
+
+    try {
+        Write-Host "  Querying RI/SP recommendations via Resource Graph..." -ForegroundColor Cyan
+        $allRows = [System.Collections.Generic.List[object]]::new()
+        $skipToken = $null
+
+        do {
+            $params = @{
+                Query        = $query
+                Subscription = $subIds
+                First        = 1000
+                ErrorAction  = 'Stop'
+            }
+            if ($skipToken) { $params['SkipToken'] = $skipToken }
+
+            $result = Search-AzGraph @params
+            if ($result) { foreach ($r in $result) { [void]$allRows.Add($r) } }
+            $skipToken = $result.SkipToken
+        } while ($skipToken)
+
+        Write-Host "  Retrieved $($allRows.Count) RI/SP recommendations." -ForegroundColor Cyan
+
+        foreach ($row in $allRows) {
+            $subId = $row.subscriptionId
+            $savings = if ($row.annualSavings) { [math]::Round([double]$row.annualSavings, 2) } else { $null }
+
+            [void]$allRecommendations.Add([PSCustomObject]@{
+                Subscription     = if ($subNameMap.ContainsKey($subId)) { $subNameMap[$subId] } else { $subId }
+                SubscriptionId   = $subId
+                Problem          = $row.shortDescriptionProblem
+                Solution         = $row.shortDescriptionSolution
+                Impact           = $row.impact
+                Category         = 'Reservation / Savings Plan'
+                ResourceType     = $row.impactedField
+                ResourceName     = $row.impactedValue
+                AnnualSavings    = $savings
+                Currency         = $row.savingsCurrency
+                Term             = $row.term
+                RecommendationId = $row.recName
+            })
+        }
+    } catch {
+        Write-Warning "  Advisor Resource Graph query failed: $($_.Exception.Message)"
+        Write-Warning "  Falling back to per-subscription REST calls..."
+
+        foreach ($sub in $Subscriptions) {
+            try {
+                $advPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Advisor/recommendations?api-version=2023-01-01&`$filter=Category eq 'Cost'"
+                $advResp = Invoke-AzRestMethod -Path $advPath -Method GET -ErrorAction Stop
+                if ($advResp.StatusCode -ne 200) { continue }
                 $advResult = ($advResp.Content | ConvertFrom-Json)
-                $recs = @($advResult.value | ForEach-Object {
-                    [PSCustomObject]@{
-                        ShortDescription   = $_.properties.shortDescription
-                        Impact             = $_.properties.impact
-                        Category           = $_.properties.category
-                        ImpactedField      = $_.properties.impactedField
-                        ImpactedValue      = $_.properties.impactedValue
-                        ExtendedProperties = $_.properties.extendedProperties
-                        Name               = $_.name
-                    }
-                })
-            }
 
-            # Filter for reservation and savings plan recommendations
-            $riRecs = $recs | Where-Object {
-                $_.ShortDescription.Problem -match 'reserv|savings plan|reserved instance' -or
-                $_.ShortDescription.Solution -match 'reserv|savings plan|reserved instance' -or
-                $_.Category -eq 'Cost' -and $_.Impact -in @('High', 'Medium')
-            }
+                $riRecs = $advResult.value | Where-Object {
+                    $_.properties.shortDescription.problem -match 'reserv|savings plan|reserved instance' -or
+                    $_.properties.shortDescription.solution -match 'reserv|savings plan|reserved instance'
+                }
 
-            foreach ($rec in $riRecs) {
-                [void]$allRecommendations.Add([PSCustomObject]@{
-                    Subscription    = $sub.Name
-                    SubscriptionId  = $sub.Id
-                    Problem         = $rec.ShortDescription.Problem
-                    Solution        = $rec.ShortDescription.Solution
-                    Impact          = $rec.Impact
-                    Category        = 'Reservation / Savings Plan'
-                    ResourceType    = $rec.ImpactedField
-                    ResourceName    = $rec.ImpactedValue
-                    AnnualSavings   = if ($rec.ExtendedProperties.annualSavingsAmount) {
-                                        [math]::Round([double]$rec.ExtendedProperties.annualSavingsAmount, 2)
-                                      } else { $null }
-                    Currency        = $rec.ExtendedProperties.savingsCurrency
-                    Term            = $rec.ExtendedProperties.term
-                    RecommendationId = $rec.Name
-                })
+                foreach ($item in $riRecs) {
+                    $rec = $item.properties
+                    [void]$allRecommendations.Add([PSCustomObject]@{
+                        Subscription     = $sub.Name
+                        SubscriptionId   = $sub.Id
+                        Problem          = $rec.shortDescription.problem
+                        Solution         = $rec.shortDescription.solution
+                        Impact           = $rec.impact
+                        Category         = 'Reservation / Savings Plan'
+                        ResourceType     = $rec.impactedField
+                        ResourceName     = $rec.impactedValue
+                        AnnualSavings    = if ($rec.extendedProperties.annualSavingsAmount) {
+                                             [math]::Round([double]$rec.extendedProperties.annualSavingsAmount, 2)
+                                           } else { $null }
+                        Currency         = $rec.extendedProperties.savingsCurrency
+                        Term             = $rec.extendedProperties.term
+                        RecommendationId = $item.name
+                    })
+                }
+            } catch {
+                Write-Warning "  Advisor query failed for $($sub.Name): $($_.Exception.Message)"
             }
-        } catch {
-            Write-Warning "  Advisor query failed for $($sub.Name): $($_.Exception.Message)"
         }
     }
 

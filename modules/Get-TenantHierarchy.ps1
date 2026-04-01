@@ -11,7 +11,10 @@ function Get-TenantHierarchy {
     param(
         [Parameter(Mandatory)]
         [ValidatePattern('^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')]
-        [string]$TenantId
+        [string]$TenantId,
+
+        [Parameter()]
+        [object[]]$Subscriptions
     )
 
     try {
@@ -30,8 +33,10 @@ function Get-TenantHierarchy {
         Write-Warning "Failed to load management group hierarchy: $($_.Exception.Message)"
         Write-Warning "Falling back to flat subscription list."
 
-        # Fallback: return subscriptions without MG hierarchy
-        $subs = @(Get-AzSubscription -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Enabled' })
+        # Use pre-loaded subscriptions if available, otherwise fetch
+        $subs = if ($Subscriptions) { @($Subscriptions) } else {
+            @(Get-AzSubscription -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Enabled' })
+        }
         $fallbackRoot = [PSCustomObject]@{
             DisplayName = "Tenant Root"
             Name        = $TenantId

@@ -18,64 +18,137 @@ function Get-OptimizationAdvice {
 
     $allRecs = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-    foreach ($sub in $Subscriptions) {
-        try {
-            Write-Host "  Scanning advisor recs for $($sub.Name)..." -ForegroundColor Cyan
-            $advPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Advisor/recommendations?api-version=2023-01-01&`$filter=Category eq 'Cost'"
-            $advResp = Invoke-AzRestMethod -Path $advPath -Method GET -ErrorAction Stop
-            $recs = @()
-            if ($advResp.StatusCode -eq 200) {
+    # Build subscription ID list and name lookup
+    $subIds = @($Subscriptions | ForEach-Object { $_.Id })
+    $subNameMap = @{}
+    foreach ($sub in $Subscriptions) { $subNameMap[$sub.Id] = $sub.Name }
+
+    # Query all Advisor cost recommendations via Resource Graph (single call)
+    $query = @"
+advisorresources
+| where type == 'microsoft.advisor/recommendations'
+| where properties.category == 'Cost'
+| project subscriptionId,
+    shortDescriptionProblem  = tostring(properties.shortDescription.problem),
+    shortDescriptionSolution = tostring(properties.shortDescription.solution),
+    impact          = tostring(properties.impact),
+    impactedField   = tostring(properties.impactedField),
+    impactedValue   = tostring(properties.impactedValue),
+    annualSavings   = tostring(properties.extendedProperties.annualSavingsAmount),
+    savingsAmount   = tostring(properties.extendedProperties.savingsAmount),
+    savingsCurrency = tostring(properties.extendedProperties.savingsCurrency)
+"@
+
+    try {
+        Write-Host "  Querying Advisor cost recommendations via Resource Graph..." -ForegroundColor Cyan
+        $allRows = [System.Collections.Generic.List[object]]::new()
+        $skipToken = $null
+
+        do {
+            $params = @{
+                Query        = $query
+                Subscription = $subIds
+                First        = 1000
+                ErrorAction  = 'Stop'
+            }
+            if ($skipToken) { $params['SkipToken'] = $skipToken }
+
+            $result = Search-AzGraph @params
+            if ($result) { foreach ($r in $result) { [void]$allRows.Add($r) } }
+            $skipToken = $result.SkipToken
+        } while ($skipToken)
+
+        Write-Host "  Retrieved $($allRows.Count) Advisor cost recommendations." -ForegroundColor Cyan
+
+        foreach ($row in $allRows) {
+            $problem  = $row.shortDescriptionProblem
+            $solution = $row.shortDescriptionSolution
+
+            # Skip reservation/savings plan recs (handled by Get-ReservationAdvice)
+            if ($problem -match 'reserv|savings plan') { continue }
+
+            # Categorize the recommendation
+            $catText = "$problem $solution"
+            $category = switch -Regex ($catText) {
+                'right.?siz|resize|downsize|scale down'    { 'Rightsize' }
+                'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate' }
+                'delet|unused|orphan|unattached'            { 'Delete Unused' }
+                'modern|upgrade|migrate|move to'           { 'Modernize' }
+                'burstable|B-series'                        { 'Rightsize' }
+                default                                     { 'Other' }
+            }
+
+            $savings = $null
+            if ($row.annualSavings) {
+                $savings = [math]::Round([double]$row.annualSavings, 2)
+            }
+            elseif ($row.savingsAmount) {
+                $savings = [math]::Round([double]$row.savingsAmount, 2)
+            }
+
+            $subId = $row.subscriptionId
+            [void]$allRecs.Add([PSCustomObject]@{
+                Subscription     = if ($subNameMap.ContainsKey($subId)) { $subNameMap[$subId] } else { $subId }
+                SubscriptionId   = $subId
+                Category         = $category
+                Impact           = $row.impact
+                Problem          = $problem
+                Solution         = $solution
+                ResourceType     = $row.impactedField
+                ResourceName     = $row.impactedValue
+                AnnualSavings    = $savings
+                Currency         = $row.savingsCurrency
+            })
+        }
+    } catch {
+        Write-Warning "  Advisor Resource Graph query failed: $($_.Exception.Message)"
+        Write-Warning "  Falling back to per-subscription REST calls..."
+
+        # Fallback: per-subscription REST API (slow but reliable)
+        foreach ($sub in $Subscriptions) {
+            try {
+                $advPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Advisor/recommendations?api-version=2023-01-01&`$filter=Category eq 'Cost'"
+                $advResp = Invoke-AzRestMethod -Path $advPath -Method GET -ErrorAction Stop
+                if ($advResp.StatusCode -ne 200) { continue }
                 $advResult = ($advResp.Content | ConvertFrom-Json)
-                $recs = @($advResult.value | ForEach-Object {
-                    [PSCustomObject]@{
-                        ShortDescription   = $_.properties.shortDescription
-                        Impact             = $_.properties.impact
-                        Category           = $_.properties.category
-                        ImpactedField      = $_.properties.impactedField
-                        ImpactedValue      = $_.properties.impactedValue
-                        ExtendedProperties = $_.properties.extendedProperties
-                        Name               = $_.name
+
+                foreach ($item in $advResult.value) {
+                    $rec = $item.properties
+                    if ($rec.shortDescription.problem -match 'reserv|savings plan') { continue }
+
+                    $catText = "$($rec.shortDescription.problem) $($rec.shortDescription.solution)"
+                    $category = switch -Regex ($catText) {
+                        'right.?siz|resize|downsize|scale down'    { 'Rightsize' }
+                        'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate' }
+                        'delet|unused|orphan|unattached'            { 'Delete Unused' }
+                        'modern|upgrade|migrate|move to'           { 'Modernize' }
+                        'burstable|B-series'                        { 'Rightsize' }
+                        default                                     { 'Other' }
                     }
-                })
+
+                    $savings = $null
+                    if ($rec.extendedProperties.annualSavingsAmount) {
+                        $savings = [math]::Round([double]$rec.extendedProperties.annualSavingsAmount, 2)
+                    } elseif ($rec.extendedProperties.savingsAmount) {
+                        $savings = [math]::Round([double]$rec.extendedProperties.savingsAmount, 2)
+                    }
+
+                    [void]$allRecs.Add([PSCustomObject]@{
+                        Subscription     = $sub.Name
+                        SubscriptionId   = $sub.Id
+                        Category         = $category
+                        Impact           = $rec.impact
+                        Problem          = $rec.shortDescription.problem
+                        Solution         = $rec.shortDescription.solution
+                        ResourceType     = $rec.impactedField
+                        ResourceName     = $rec.impactedValue
+                        AnnualSavings    = $savings
+                        Currency         = $rec.extendedProperties.savingsCurrency
+                    })
+                }
+            } catch {
+                Write-Warning "  Advisor query failed for $($sub.Name): $($_.Exception.Message)"
             }
-
-            foreach ($rec in $recs) {
-                # Skip reservation/savings plan recs (handled by Get-ReservationAdvice)
-                if ($rec.ShortDescription.Problem -match 'reserv|savings plan') { continue }
-
-                # Categorize the recommendation
-                $category = switch -Regex ($rec.ShortDescription.Problem + ' ' + $rec.ShortDescription.Solution) {
-                    'right.?siz|resize|downsize|scale down'    { 'Rightsize' }
-                    'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate' }
-                    'delet|unused|orphan|unattached'            { 'Delete Unused' }
-                    'modern|upgrade|migrate|move to'           { 'Modernize' }
-                    'burstable|B-series'                        { 'Rightsize' }
-                    default                                     { 'Other' }
-                }
-
-                $savings = $null
-                if ($rec.ExtendedProperties.annualSavingsAmount) {
-                    $savings = [math]::Round([double]$rec.ExtendedProperties.annualSavingsAmount, 2)
-                }
-                elseif ($rec.ExtendedProperties.savingsAmount) {
-                    $savings = [math]::Round([double]$rec.ExtendedProperties.savingsAmount, 2)
-                }
-
-                [void]$allRecs.Add([PSCustomObject]@{
-                    Subscription     = $sub.Name
-                    SubscriptionId   = $sub.Id
-                    Category         = $category
-                    Impact           = $rec.Impact
-                    Problem          = $rec.ShortDescription.Problem
-                    Solution         = $rec.ShortDescription.Solution
-                    ResourceType     = $rec.ImpactedField
-                    ResourceName     = $rec.ImpactedValue
-                    AnnualSavings    = $savings
-                    Currency         = $rec.ExtendedProperties.savingsCurrency
-                })
-            }
-        } catch {
-            Write-Warning "  Advisor query failed for $($sub.Name): $($_.Exception.Message)"
         }
     }
 

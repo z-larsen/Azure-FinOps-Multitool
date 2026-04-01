@@ -78,17 +78,20 @@ cd AzureFinOpsScanner
 .\Start-FinOpsScanner.ps1
 ```
 
-1. The WPF window opens
-2. Click **Scan Tenant**
-3. The scanner authenticates (interactive login if needed), then runs
-   through 10 data-collection stages with a progress bar
-4. When done, browse the tabs:
+1. The WPF window opens (no authentication yet)
+2. Click **Choose Tenant** — a browser login opens; after sign-in, a
+   tenant picker dialog lists all accessible tenants
+3. Select a tenant and click **Select**
+4. Click **Scan Tenant** — the scanner runs through 14 data-collection
+   stages with a progress bar
+5. When done, browse the tabs:
    - **Overview** — cost summary cards, subscription cost table, top resources by spend
    - **Cost Analysis** — pick a tag from the dropdown to see spend by tag value
-   - **Tags** — tag inventory, coverage %, CAF compliance check
+   - **Tags** — tag inventory with unique values, coverage %, CAF compliance check
    - **Optimization** — AHB gaps, RI recs, Savings Plan recs (split), Advisor recs with estimated savings and contract-aware notes
    - **FinOps Guidance** — pillar-by-pillar assessment with selectable/copyable references
-5. Click **Export Report** to save as CSV or HTML
+6. Click **Export Report** to save as CSV or HTML
+7. Click **Choose Tenant** again any time to switch tenants without restarting
 
 ---
 
@@ -98,7 +101,7 @@ cd AzureFinOpsScanner
 AzureFinOpsScanner/
 ├── Start-FinOpsScanner.ps1              # Entry point — loads modules, launches GUI
 ├── modules/
-│   ├── Initialize-Scanner.ps1           # Auth + environment detection (Commercial/Gov)
+│   ├── Initialize-Scanner.ps1           # Auth, tenant picker, environment detection (Commercial/Gov)
 │   ├── Get-TenantHierarchy.ps1          # Management group tree
 │   ├── Get-ContractInfo.ps1             # Billing account / contract type
 │   ├── Get-CostData.ps1                 # Actual + forecast costs (MG scope → per-sub fallback)
@@ -106,8 +109,8 @@ AzureFinOpsScanner/
 │   ├── Get-TagInventory.ps1             # Tag names, values, coverage
 │   ├── Get-CostByTag.ps1               # Cost breakdown by tag (MG → per-sub fallback)
 │   ├── Get-AHBOpportunities.ps1         # Azure Hybrid Benefit gaps
-│   ├── Get-ReservationAdvice.ps1        # RI / Savings Plan recommendations (REST API)
-│   ├── Get-OptimizationAdvice.ps1       # Advisor cost optimizations (REST API)
+│   ├── Get-ReservationAdvice.ps1        # RI / Savings Plan recommendations (Resource Graph → REST fallback)
+│   ├── Get-OptimizationAdvice.ps1       # Advisor cost optimizations (Resource Graph → REST fallback)
 │   └── Get-TagRecommendations.ps1       # CAF tag compliance check
 ├── gui/
 │   └── MainWindow.xaml                  # WPF layout (Azure-themed, virtualized grids)
@@ -124,7 +127,7 @@ a `DispatcherTimer` so the UI updates between stages.
 
 | Stage | Module                    | API Used                                  | Time  |
 |-------|---------------------------|-------------------------------------------|-------|
-| 1     | Initialize-Scanner        | `Connect-AzAccount` (if needed)           | ~2s   |
+| 1     | Verify tenant context     | Uses auth from Choose Tenant step         | <1s   |
 | 2     | Get-TenantHierarchy       | `Get-AzManagementGroup -Expand -Recurse`  | ~3s   |
 | 3     | Get-ContractInfo          | REST: `/providers/Microsoft.Billing/...`  | ~1s   |
 | 4     | Get-CostData              | REST: Cost Management Query (MG scope)    | ~5s   |
@@ -132,16 +135,17 @@ a `DispatcherTimer` so the UI updates between stages.
 | 6     | Get-TagInventory          | `Search-AzGraph` (cross-subscription)     | ~3s   |
 | 7     | Get-CostByTag             | REST: Cost Management Query + tag group   | ~5s   |
 | 8     | Get-AHBOpportunities      | `Search-AzGraph` (3 queries)              | ~3s   |
-| 9     | Get-ReservationAdvice     | REST: Advisor + Reservation Recs API      | ~10s  |
-| 10    | Get-OptimizationAdvice    | REST: Advisor Cost Recs API               | ~10s  |
+| 9     | Get-ReservationAdvice     | `Search-AzGraph` (advisorresources) + Reservation Recs API | ~3s |
+| 10    | Get-OptimizationAdvice    | `Search-AzGraph` (advisorresources)       | ~3s   |
 | 11    | Get-TagRecommendations    | Local comparison (no API call)            | <1s   |
 
 > **Performance Note:** Cost queries try management-group scope first
 > (one call for all subs). If MG scope returns a non-200 status (e.g.
 > RBAC), the scanner falls back to per-subscription queries. Advisor
-> and resource cost queries always run per-subscription via REST API
-> (no `Set-AzContext` calls). Total scan time is typically 30-90 seconds
-> depending on subscription count.
+> recommendations use Azure Resource Graph (`advisorresources` table)
+> for a single cross-subscription query instead of per-sub REST calls,
+> with automatic fallback to per-subscription REST if ARG is unavailable.
+> Total scan time is typically 30-60 seconds regardless of subscription count.
 
 ---
 
@@ -150,7 +154,7 @@ a `DispatcherTimer` so the UI updates between stages.
 | Decision | Why |
 |----------|-----|
 | MG-scope cost queries with per-sub fallback | One call covers all subs; auto-fallback if RBAC blocks MG scope |
-| REST API for Advisor (no cmdlet) | Avoids `Set-AzContext` per sub and broken parameter sets in newer Az.Advisor |
+| Resource Graph for Advisor | Single cross-tenant query via `advisorresources` table; REST fallback if ARG unavailable |
 | Resource Graph for tags + AHB | Cross-subscription, fast (KQL), paginated |
 | API pagination (nextLink) | Cost Management caps results at ~5000 rows; pagination captures all resources |
 | List\<T\> instead of array += | O(n) vs O(n^2) — critical for tenants with 1000s of resources |
@@ -163,6 +167,10 @@ a `DispatcherTimer` so the UI updates between stages.
 | UTF-8 BOM on all .ps1 files | Ensures PS 5.1 reads special characters correctly |
 | 100% ASCII XAML | All non-ASCII replaced with XML entities to avoid WPF encoding issues |
 | Auto-detect Azure environment | Supports both Commercial and Azure Government without config changes |
+| Separate Choose Tenant / Scan buttons | Auth happens once via Choose Tenant; scan is repeatable without re-auth |
+| WPF minimize during browser auth | MSAL browser login needs the foreground; scanner minimizes then restores |
+| Tenant picker dialog | WPF ListBox shows all accessible tenants; supports 30+ tenants cleanly |
+| LoginExperienceV2 suppressed | `$env:AZURE_LOGIN_EXPERIENCE_V2=Off` prevents Az.Accounts 12+ console subscription picker |
 
 ---
 
@@ -185,14 +193,16 @@ a `DispatcherTimer` so the UI updates between stages.
 | Advisor tabs empty | Advisor not enabled or no cost recs | Normal for small/new subscriptions |
 | Forecast shows $0.00 | Forecast not available for account type | Common for MCA in first billing period |
 | Resources table shows blue bar only | DataGrid binding issue | Ensure `@()` wrapper on ItemsSource |
-| Scan hangs at 90% | Large tenant with many subscriptions | Expected — Advisor queries run per-sub |
-| Gov tenant not detected | No existing Az session | Scanner will prompt for environment choice |
+| Scan hangs at 90% | Large tenant with many subscriptions | Advisor now uses Resource Graph; should be fast |
+| Gov tenant not detected | No existing Az session | Click Choose Tenant — auto-detects on login |
+| Console shows subscription picker | Az.Accounts 12+ login experience | Fixed — scanner sets `AZURE_LOGIN_EXPERIENCE_V2=Off` |
+| Scanner stays minimized | Auth error during Connect-AzAccount | Fixed — try/finally ensures window restores |
 
 ---
 
 ## Scalability
 
-Tested with tenants from 1 subscription to 50+. Key scalability features:
+Tested with tenants from 1 subscription to 76+. Key scalability features:
 
 - **API pagination** — Cost Management `nextLink` followed automatically so
   tenants with 5000+ billed resources get complete data
@@ -204,9 +214,14 @@ Tested with tenants from 1 subscription to 50+. Key scalability features:
   enabled so WPF only renders visible rows
 - **MG-scope-first queries** — Cost and tag queries try a single MG-scope
   call before falling back to per-subscription loops
+- **Resource Graph for Advisor** — Optimization and RI/SP recommendations
+  use `advisorresources` table (one call across all subs) instead of 2N
+  REST calls, with automatic per-sub REST fallback
+- **MG hierarchy uses pre-loaded subs** — Fallback doesn't re-fetch
+  subscriptions, using the list already retrieved during auth
 
-For very large tenants (100+ subscriptions), expect scan times of 3-5
-minutes due to sequential per-subscription Advisor and resource cost queries.
+For very large tenants (100+ subscriptions), scan times are typically
+30-60 seconds thanks to cross-subscription Resource Graph queries.
 
 ---
 

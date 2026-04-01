@@ -108,6 +108,8 @@
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center" Margin="16,3,0,0"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" DockPanel.Dock="Right">
+                    <Button x:Name="TenantButton" Content="&#x1F513; Choose Tenant" Style="{StaticResource AzureButton}"
+                            Background="Transparent" Foreground="White" BorderBrush="White" Margin="0,0,8,0"/>
                     <Button x:Name="ScanButton" Content="&#x26A1; Scan Tenant" Style="{StaticResource AzureButton}"
                             Background="White" Foreground="#0078D4" Margin="0,0,8,0"/>
                     <Button x:Name="ExportButton" Content="&#x1F4CB; Export Report" Style="{StaticResource AzureButton}"
@@ -121,7 +123,7 @@
             <DockPanel>
                 <ProgressBar x:Name="ProgressBar" Width="220" Height="14" Minimum="0" Maximum="100" Value="0"
                              Foreground="#0078D4" Background="#E0E0E0" DockPanel.Dock="Right" Margin="10,0,0,0"/>
-                <TextBlock x:Name="StatusText" Text="Click 'Scan Tenant' to begin" Foreground="#666"
+                <TextBlock x:Name="StatusText" Text="Click 'Choose Tenant' to connect to Azure" Foreground="#666"
                            FontSize="12" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
