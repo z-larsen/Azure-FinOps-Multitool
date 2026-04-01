@@ -13,6 +13,9 @@ pillars: **Understand**, **Quantify**, and **Optimize**.
 
 ## Screenshots
 
+### Choose Tenant — Multi-Tenant Picker
+![Choose Tenant](screenshots/chooseTenant.png)
+
 ### Overview — Cost Summary & Resources by Spend
 ![Overview](screenshots/overview.png)
 
