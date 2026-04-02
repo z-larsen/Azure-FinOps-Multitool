@@ -37,6 +37,10 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Audit','Deny','Disabled')
             Purpose      = 'Enforce tagging on all resources for cost allocation and chargeback visibility'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#tags'
+            Parameters   = @(
+                @{ Name = 'tagName';  Label = 'Tag name (e.g. CostCenter)'; Required = $true }
+                @{ Name = 'tagValue'; Label = 'Tag value (leave blank for any value)'; Required = $false }
+            )
         }
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/96670d01-0a4d-4649-9c89-2d3abc0a5025'
@@ -48,6 +52,10 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Audit','Deny','Disabled')
             Purpose      = 'Enforce tagging on resource groups for cost allocation at the container level'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#tags'
+            Parameters   = @(
+                @{ Name = 'tagName';  Label = 'Tag name (e.g. CostCenter)'; Required = $true }
+                @{ Name = 'tagValue'; Label = 'Tag value (leave blank for any value)'; Required = $false }
+            )
         }
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/ea3f2387-9b95-492a-a190-fcbef5-37f7'
@@ -59,6 +67,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Modify','Disabled')
             Purpose      = 'Auto-inherit tags from resource group to child resources for consistent cost allocation'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#tags'
+            Parameters   = @(
+                @{ Name = 'tagName'; Label = 'Tag name to inherit (e.g. CostCenter)'; Required = $true }
+            )
         }
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/40df99da-1232-49b1-a39a-6da8d878f469'
@@ -70,6 +81,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Modify','Disabled')
             Purpose      = 'Auto-inherit tags from subscription to resources for top-level cost allocation'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#tags'
+            Parameters   = @(
+                @{ Name = 'tagName'; Label = 'Tag name to inherit (e.g. CostCenter)'; Required = $true }
+            )
         }
 
         # === COST GOVERNANCE ===
@@ -83,6 +97,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Deny')
             Purpose      = 'Restrict VM sizes to prevent over-provisioning and control compute costs'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#compute'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed VM SKUs (comma-separated, e.g. Standard_D2s_v3,Standard_B2ms)'; Required = $true; IsArray = $true }
+            )
         }
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c'
@@ -94,6 +111,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Deny')
             Purpose      = 'Restrict resource deployment to approved regions to avoid unexpected inter-region transfer costs'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedLocations'; Label = 'Allowed locations (comma-separated, e.g. eastus,westus2,centralus)'; Required = $true; IsArray = $true }
+            )
         }
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/6c112d4e-5bc7-47ae-a041-ea2d9dccd749'
@@ -105,6 +125,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Audit','Deny','Disabled')
             Purpose      = 'Block expensive or unnecessary resource types to reduce cost sprawl'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
+            Parameters   = @(
+                @{ Name = 'listOfResourceTypesNotAllowed'; Label = 'Resource types to block (comma-separated, e.g. Microsoft.Sql/servers,Microsoft.HDInsight/clusters)'; Required = $true; IsArray = $true }
+            )
         }
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/a08ec900-254a-4555-9bf5-e42af04b5c5c'
@@ -116,6 +139,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Deny')
             Purpose      = 'Allowlist resource types to prevent deployment of costly or unsanctioned services'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedTypes'; Label = 'Allowed resource types (comma-separated)'; Required = $true; IsArray = $true }
+            )
         }
 
         # === STORAGE COST CONTROL ===
@@ -129,6 +155,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Audit','Deny','Disabled')
             Purpose      = 'Prevent Premium storage where Standard suffices to reduce storage costs'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#storage'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed storage SKUs (comma-separated, e.g. Standard_LRS,Standard_GRS)'; Required = $true; IsArray = $true }
+            )
         }
 
         # === HYBRID BENEFIT ===
@@ -192,6 +221,9 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('Audit','Deny','Disabled')
             Purpose      = 'Cap Cosmos DB throughput (RU/s) to prevent runaway database costs'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#cosmos-db'
+            Parameters   = @(
+                @{ Name = 'throughputMax'; Label = 'Max throughput (RU/s, e.g. 4000)'; Required = $true }
+            )
         }
     )
 
@@ -223,6 +255,7 @@ function Get-PolicyRecommendations {
             Purpose        = $rec.Purpose
             PolicyDefId    = $rec.PolicyDefId
             Reference      = $rec.Reference
+            Parameters     = if ($rec.Parameters) { $rec.Parameters } else { @() }
         }
     }
 

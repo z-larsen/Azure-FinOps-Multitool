@@ -99,8 +99,8 @@ $controls = @(
     'PolicyRecsCountText', 'PolicyInventoryGrid', 'PolicyComplianceGrid',
     'PolicyRecsComplianceText', 'PolicyRecsGrid', 'MissingPolicyButtons',
     'PolicyDeployPanel', 'PolicyDeployTitle', 'PolicyScopeSelector',
-    'PolicyEffectSelector', 'PolicyDeployButton', 'PolicyDeployCancelButton',
-    'PolicyDeployStatus'
+    'PolicyEffectSelector', 'PolicyParamsPanel', 'PolicyDeployButton',
+    'PolicyDeployCancelButton', 'PolicyDeployStatus'
 )
 
 foreach ($name in $controls) {
@@ -1513,11 +1513,13 @@ function Show-PolicyDeployPanel {
         [string]$PolicyDisplayName,
         [string]$PolicyDefId,
         [string[]]$AllowedEffects,
-        [string]$DefaultEffect
+        [string]$DefaultEffect,
+        [object[]]$Parameters = @()
     )
 
     $script:policyDeployCurrentDefId   = $PolicyDefId
     $script:policyDeployCurrentName    = $PolicyDisplayName
+    $script:policyDeployCurrentParams  = $Parameters
     $script:PolicyDeployTitle.Text     = "Deploy policy: $PolicyDisplayName"
     $script:PolicyDeployStatus.Text    = ''
     $script:PolicyDeployPanel.Visibility = 'Visible'
@@ -1527,9 +1529,32 @@ function Show-PolicyDeployPanel {
     foreach ($eff in $AllowedEffects) {
         $script:PolicyEffectSelector.Items.Add($eff) | Out-Null
     }
-    # Pre-select default
-    $idx = [Array]::IndexOf($AllowedEffects, $DefaultEffect)
+    # Pre-select default (Audit for safety)
+    $safeDefault = if ($AllowedEffects -contains 'Audit') { 'Audit' } else { $DefaultEffect }
+    $idx = [Array]::IndexOf($AllowedEffects, $safeDefault)
     $script:PolicyEffectSelector.SelectedIndex = if ($idx -ge 0) { $idx } else { 0 }
+
+    # Build dynamic parameter inputs
+    $script:PolicyParamsPanel.Children.Clear()
+    $script:policyParamTextBoxes = @{}
+    if ($Parameters -and $Parameters.Count -gt 0) {
+        foreach ($p in $Parameters) {
+            $lbl = [System.Windows.Controls.TextBlock]::new()
+            $lbl.Text = "$($p.Label)$(if ($p.Required) { ' *' } else { '' }):"
+            $lbl.FontSize = 12
+            $lbl.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+            $script:PolicyParamsPanel.Children.Add($lbl) | Out-Null
+
+            $tb = [System.Windows.Controls.TextBox]::new()
+            $tb.Width = 500
+            $tb.HorizontalAlignment = 'Left'
+            $tb.FontSize = 12
+            $tb.Padding = [System.Windows.Thickness]::new(6, 4, 6, 4)
+            $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+            $script:PolicyParamsPanel.Children.Add($tb) | Out-Null
+            $script:policyParamTextBoxes[$p.Name] = @{ TextBox = $tb; Param = $p }
+        }
+    }
 
     # Load scopes lazily (once per scan)
     if (-not $script:policyDeployScopesLoaded -and $script:scanData.Auth) {
@@ -1576,12 +1601,13 @@ function Populate-MissingPolicyButtons {
         $btn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
         $btn.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
         $btn.BorderThickness = [System.Windows.Thickness]::new(1)
-        $polName   = $pol.DisplayName
-        $polDefId  = $pol.PolicyDefId
+        $polName    = $pol.DisplayName
+        $polDefId   = $pol.PolicyDefId
         $polEffects = $pol.AllowedEffects
         $polDefault = $pol.DefaultEffect
+        $polParams  = if ($pol.Parameters) { $pol.Parameters } else { @() }
         $btn.Add_Click({
-            Show-PolicyDeployPanel -PolicyDisplayName $polName -PolicyDefId $polDefId -AllowedEffects $polEffects -DefaultEffect $polDefault
+            Show-PolicyDeployPanel -PolicyDisplayName $polName -PolicyDefId $polDefId -AllowedEffects $polEffects -DefaultEffect $polDefault -Parameters $polParams
         }.GetNewClosure())
         $script:MissingPolicyButtons.Children.Add($btn) | Out-Null
     }
@@ -2255,13 +2281,36 @@ $script:PolicyDeployButton.Add_Click({
     }
 
     $scope = $script:policyDeployScopes[$selectedIdx].Scope
+
+    # Collect dynamic parameter values
+    $additionalParams = @{}
+    if ($script:policyParamTextBoxes -and $script:policyParamTextBoxes.Count -gt 0) {
+        foreach ($key in $script:policyParamTextBoxes.Keys) {
+            $entry = $script:policyParamTextBoxes[$key]
+            $val = $entry.TextBox.Text.Trim()
+            $paramDef = $entry.Param
+            if ($paramDef.Required -and [string]::IsNullOrWhiteSpace($val)) {
+                $script:PolicyDeployStatus.Text = "Required parameter missing: $($paramDef.Label -replace ' \*$','')"
+                $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+                return
+            }
+            if (-not [string]::IsNullOrWhiteSpace($val)) {
+                if ($paramDef.IsArray) {
+                    $additionalParams[$key] = @($val -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                } else {
+                    $additionalParams[$key] = $val
+                }
+            }
+        }
+    }
+
     $script:PolicyDeployStatus.Text = 'Deploying...'
     $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
         [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
     )
 
-    $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $defId -Effect $effect -DisplayName $displayName
+    $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $defId -Effect $effect -DisplayName $displayName -AdditionalParameters $additionalParams
     if ($result.Success) {
         $script:PolicyDeployStatus.Text = "Deployed: $displayName ($effect)"
         $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')

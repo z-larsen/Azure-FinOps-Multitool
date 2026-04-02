@@ -379,6 +379,7 @@
                                     <ComboBox x:Name="PolicyScopeSelector" Width="500" HorizontalAlignment="Left" FontSize="12" Padding="6,4" Margin="0,0,0,10"/>
                                     <TextBlock Text="Effect:" FontSize="12" Margin="0,0,0,4"/>
                                     <ComboBox x:Name="PolicyEffectSelector" Width="200" HorizontalAlignment="Left" FontSize="12" Padding="6,4" Margin="0,0,0,10"/>
+                                    <StackPanel x:Name="PolicyParamsPanel" Margin="0,0,0,10"/>
                                     <StackPanel Orientation="Horizontal">
                                         <Button x:Name="PolicyDeployButton" Content="Deploy Policy" Style="{StaticResource AzureButton}"
                                                 Background="#0078D4" Foreground="White" Margin="0,0,10,0"/>

@@ -6,6 +6,7 @@ single-pane-of-glass view of costs, tagging health, optimization
 opportunities, and FinOps maturity — organized around the three FinOps
 pillars: **Understand**, **Quantify**, and **Optimize**.
 
+The FinOps Multitool is a lightweight, read‑only scanner designed to complement the Microsoft FinOps Toolkit. It does not replace Cost Management, FinOps Hubs, or Power BI starter kits. Instead, it helps practitioners quickly identify gaps, validate assumptions, and accelerate conversations during FinOps workshops and scoping engagements.
 ---
 
 ## Screenshots
