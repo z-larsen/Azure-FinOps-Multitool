@@ -91,7 +91,9 @@ $controls = @(
     'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
     # Guidance
-    'UnderstandText', 'QuantifyText', 'OptimizeText', 'ReferencesText',
+    'GuidanceScorePanel', 'ActionPlanSubtitle', 'ActionPlanPanel',
+    'UnderstandPanel', 'QuantifyPanel', 'OptimizePanel',
+    'PersonasPanel', 'ReferencesPanel',
     # Policy
     'PolicyCountText', 'PolicyComplianceText', 'PolicyNonCompliantText',
     'PolicyRecsCountText', 'PolicyInventoryGrid', 'PolicyComplianceGrid',
@@ -657,34 +659,508 @@ function Populate-GuidanceTab {
         Get-CurrencySymbol -Code $d.ResourceCosts[0].Currency
     } else { '$' }
 
-    # -- Understand Pillar ----------------------------------------------
-    $understand = @()
+    # =====================================================================
+    # HELPER: Add a rich text line to a StackPanel
+    # =====================================================================
+    function Add-GuidanceLine {
+        param(
+            [System.Windows.Controls.StackPanel]$Panel,
+            [string]$Icon,          # Emoji-style prefix e.g. [!] or checkmark
+            [string]$Bold,          # Bold portion
+            [string]$Normal,        # Normal text after bold
+            [string]$Color = '#444',
+            [double]$FontSize = 12.5,
+            [double]$BottomMargin = 6
+        )
+        $tb = [System.Windows.Controls.TextBlock]::new()
+        $tb.TextWrapping = 'Wrap'
+        $tb.FontSize = $FontSize
+        $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, $BottomMargin)
+
+        if ($Icon) {
+            $iconRun = [System.Windows.Documents.Run]::new("$Icon ")
+            $iconRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($Color)
+            $iconRun.FontWeight = 'Bold'
+            $tb.Inlines.Add($iconRun) | Out-Null
+        }
+        if ($Bold) {
+            $boldRun = [System.Windows.Documents.Run]::new($Bold)
+            $boldRun.FontWeight = 'Bold'
+            $boldRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
+            $tb.Inlines.Add($boldRun) | Out-Null
+        }
+        if ($Normal) {
+            $sep = if ($Bold) { '  ' } else { '' }
+            $normRun = [System.Windows.Documents.Run]::new("$sep$Normal")
+            $normRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#444')
+            $tb.Inlines.Add($normRun) | Out-Null
+        }
+        $Panel.Children.Add($tb) | Out-Null
+    }
+
+    # =====================================================================
+    # FINOPS MATURITY SCORE (0-100)
+    # Based on FinOps Foundation Maturity Model + Microsoft CAF
+    # Categories: Visibility (25), Allocation (20), Budgeting (15),
+    #             Optimization (20), Governance (20)
+    # =====================================================================
+    $score = 0
+    $maxScore = 100
+    $breakdown = @{}
+
+    # --- Visibility (25 pts) -------------------------------------------
+    $visScore = 0
+    # Tag coverage: 0-10 pts
+    if ($d.Tags) {
+        $visScore += [math]::Min([math]::Floor($d.Tags.TagCoverage / 10), 10)
+    }
+    # Cost data available: 5 pts
+    if ($d.Costs -and $d.Costs.Count -gt 0) { $visScore += 5 }
+    # Cost trend available: 5 pts
+    if ($d.CostTrend -and $d.CostTrend.HasData) { $visScore += 5 }
+    # Resource-level cost visibility: 5 pts
+    if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) { $visScore += 5 }
+    $breakdown['Visibility'] = [math]::Min($visScore, 25)
+    $score += $breakdown['Visibility']
+
+    # --- Allocation (20 pts) -------------------------------------------
+    $allocScore = 0
+    # Tag compliance (CAF recommended): 0-8 pts
+    if ($d.TagRecs) {
+        $allocScore += [math]::Min([math]::Floor($d.TagRecs.CompliancePercent / 12.5), 8)
+    }
+    # Cost-by-tag data available: 4 pts
+    if ($d.CostByTag -and -not $d.CostByTag.NoTagsFound -and $d.CostByTag.CostByTag.Count -gt 0) { $allocScore += 4 }
+    # Has CostCenter or BusinessUnit tag: 4 pts
+    if ($d.Tags -and $d.Tags.TagNames) {
+        $lcKeys = $d.Tags.TagNames.Keys | ForEach-Object { $_.ToLower() }
+        if ($lcKeys -contains 'costcenter' -or $lcKeys -contains 'businessunit' -or $lcKeys -contains 'department') { $allocScore += 4 }
+    }
+    # Cost allocation rules configured: 4 pts
+    if ($d.Billing -and $d.Billing.CostAllocationRules -and $d.Billing.CostAllocationRules.Count -gt 0) { $allocScore += 4 }
+    $breakdown['Allocation'] = [math]::Min($allocScore, 20)
+    $score += $breakdown['Allocation']
+
+    # --- Budgeting & Forecasting (15 pts) ------------------------------
+    $budgetScore = 0
+    # Has budgets: 5 pts
+    if ($d.Budgets -and $d.Budgets.HasData) { $budgetScore += 5 }
+    # Budget coverage: 0-5 pts
+    if ($d.Budgets) {
+        $budgetScore += [math]::Min([math]::Floor($d.Budgets.BudgetCoverage / 20), 5)
+    }
+    # No budgets over 100%: 5 pts (or partial credit)
+    if ($d.Budgets -and $d.Budgets.HasData) {
+        if ($d.Budgets.OverBudgetCount -eq 0) { $budgetScore += 5 }
+        elseif ($d.Budgets.AtRiskCount -eq 0) { $budgetScore += 3 }
+    }
+    $breakdown['Budgeting'] = [math]::Min($budgetScore, 15)
+    $score += $breakdown['Budgeting']
+
+    # --- Optimization (20 pts) -----------------------------------------
+    $optScore = 0
+    # Commitment utilization > 80%: 5 pts
+    if ($d.Commitments -and $d.Commitments.HasData) {
+        if ($d.Commitments.RIAvgUtilization -ge 80) { $optScore += 5 }
+        elseif ($d.Commitments.RIAvgUtilization -ge 60) { $optScore += 3 }
+    } else {
+        # No commitments = no waste, partial credit
+        $optScore += 2
+    }
+    # Savings realized from commitments: 5 pts
+    if ($d.Savings -and $d.Savings.TotalMonthly -gt 0) { $optScore += 5 }
+    # Low Advisor recommendations (fewer = better optimized): 0-5 pts
+    if ($d.Optimization) {
+        if ($d.Optimization.TotalCount -eq 0) { $optScore += 5 }
+        elseif ($d.Optimization.TotalCount -le 3) { $optScore += 3 }
+        elseif ($d.Optimization.TotalCount -le 10) { $optScore += 1 }
+    } else { $optScore += 2 }
+    # Few orphaned resources: 5 pts
+    if ($d.Orphans) {
+        $orphanTotal = if ($d.Orphans.TotalCount) { $d.Orphans.TotalCount } else { 0 }
+        if ($orphanTotal -eq 0) { $optScore += 5 }
+        elseif ($orphanTotal -le 3) { $optScore += 3 }
+        elseif ($orphanTotal -le 10) { $optScore += 1 }
+    } else { $optScore += 2 }
+    $breakdown['Optimization'] = [math]::Min($optScore, 20)
+    $score += $breakdown['Optimization']
+
+    # --- Governance (20 pts) -------------------------------------------
+    $govScore = 0
+    # Has Azure policies: 5 pts
+    if ($d.PolicyInv -and $d.PolicyInv.AssignmentCount -gt 0) { $govScore += 5 }
+    # FinOps policies coverage: 0-5 pts
+    if ($d.PolicyRecs) {
+        $policyPct = if ($d.PolicyRecs.Analysis.Count -gt 0) {
+            [math]::Round(($d.PolicyRecs.Assigned.Count / $d.PolicyRecs.Analysis.Count) * 100, 0)
+        } else { 0 }
+        $govScore += [math]::Min([math]::Floor($policyPct / 20), 5)
+    }
+    # Policy compliance > 80%: 5 pts
+    if ($d.PolicyInv -and $d.PolicyInv.CompliancePct -ge 80) { $govScore += 5 }
+    elseif ($d.PolicyInv -and $d.PolicyInv.CompliancePct -ge 50) { $govScore += 3 }
+    # Has management group hierarchy: 5 pts
+    if ($d.Hierarchy -and $d.Hierarchy.RootGroup) { $govScore += 5 }
+    elseif ($d.Hierarchy -and $d.Hierarchy.FlatSubs) { $govScore += 2 }
+    $breakdown['Governance'] = [math]::Min($govScore, 20)
+    $score += $breakdown['Governance']
+
+    $score = [math]::Min($score, $maxScore)
+
+    # Grade label
+    $grade = switch ($true) {
+        ($score -ge 85) { 'Excellent'; break }
+        ($score -ge 70) { 'Good'; break }
+        ($score -ge 50) { 'Developing'; break }
+        ($score -ge 30) { 'Foundational'; break }
+        default { 'Getting Started' }
+    }
+
+    $gradeColor = switch ($true) {
+        ($score -ge 85) { '#107C10'; break }
+        ($score -ge 70) { '#0078D4'; break }
+        ($score -ge 50) { '#8764B8'; break }
+        ($score -ge 30) { '#FF8C00'; break }
+        default { '#D13438' }
+    }
+
+    # =====================================================================
+    # RENDER SCORE CARD
+    # =====================================================================
+    $script:GuidanceScorePanel.Children.Clear()
+
+    # Score card container
+    $scoreCard = [System.Windows.Controls.Border]::new()
+    $scoreCard.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F8F9FA')
+    $scoreCard.CornerRadius = [System.Windows.CornerRadius]::new(8)
+    $scoreCard.Padding = [System.Windows.Thickness]::new(24)
+    $scoreCard.Margin = [System.Windows.Thickness]::new(0, 10, 0, 10)
+    $scoreCard.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#E0E0E0')
+    $scoreCard.BorderThickness = [System.Windows.Thickness]::new(1)
+
+    $scoreStack = [System.Windows.Controls.StackPanel]::new()
+
+    # Title
+    $titleTb = [System.Windows.Controls.TextBlock]::new()
+    $titleTb.FontSize = 18
+    $titleTb.FontWeight = 'SemiBold'
+    $titleTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $titleTb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
+    $titleTb.Inlines.Add([System.Windows.Documents.Run]::new('FinOps Maturity Score:  ')) | Out-Null
+    $scoreRun = [System.Windows.Documents.Run]::new("$score / $maxScore")
+    $scoreRun.FontSize = 24
+    $scoreRun.FontWeight = 'Bold'
+    $scoreRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($gradeColor)
+    $titleTb.Inlines.Add($scoreRun) | Out-Null
+    $gradeRun = [System.Windows.Documents.Run]::new("  ($grade)")
+    $gradeRun.FontSize = 16
+    $gradeRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($gradeColor)
+    $titleTb.Inlines.Add($gradeRun) | Out-Null
+    $scoreStack.Children.Add($titleTb) | Out-Null
+
+    # Methodology note
+    $methodTb = [System.Windows.Controls.TextBlock]::new()
+    $methodTb.Text = 'Score based on FinOps Foundation Maturity Model and Microsoft Cloud Adoption Framework. Categories: Visibility (25), Allocation (20), Budgeting (15), Optimization (20), Governance (20).'
+    $methodTb.TextWrapping = 'Wrap'
+    $methodTb.FontSize = 11
+    $methodTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#888')
+    $methodTb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
+    $scoreStack.Children.Add($methodTb) | Out-Null
+
+    # Category breakdown in a horizontal WrapPanel
+    $catPanel = [System.Windows.Controls.WrapPanel]::new()
+    $catColors = @{
+        'Visibility'   = '#0078D4'
+        'Allocation'   = '#005A9E'
+        'Budgeting'    = '#8764B8'
+        'Optimization' = '#107C10'
+        'Governance'   = '#D83B01'
+    }
+    $catMax = @{ 'Visibility' = 25; 'Allocation' = 20; 'Budgeting' = 15; 'Optimization' = 20; 'Governance' = 20 }
+    foreach ($cat in @('Visibility', 'Allocation', 'Budgeting', 'Optimization', 'Governance')) {
+        $catBorder = [System.Windows.Controls.Border]::new()
+        $catBorder.Background = [System.Windows.Media.Brushes]::White
+        $catBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+        $catBorder.Padding = [System.Windows.Thickness]::new(14, 8, 14, 8)
+        $catBorder.Margin = [System.Windows.Thickness]::new(0, 0, 10, 6)
+        $catBorder.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#DDD')
+        $catBorder.BorderThickness = [System.Windows.Thickness]::new(1)
+
+        $catTb = [System.Windows.Controls.TextBlock]::new()
+        $catTb.FontSize = 12
+        $nameRun = [System.Windows.Documents.Run]::new("$cat  ")
+        $nameRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#666')
+        $catTb.Inlines.Add($nameRun) | Out-Null
+
+        $valRun = [System.Windows.Documents.Run]::new("$($breakdown[$cat]) / $($catMax[$cat])")
+        $valRun.FontWeight = 'Bold'
+        $valRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($catColors[$cat])
+        $catTb.Inlines.Add($valRun) | Out-Null
+
+        $catBorder.Child = $catTb
+        $catPanel.Children.Add($catBorder) | Out-Null
+    }
+    $scoreStack.Children.Add($catPanel) | Out-Null
+
+    $scoreCard.Child = $scoreStack
+    $script:GuidanceScorePanel.Children.Add($scoreCard) | Out-Null
+
+    # =====================================================================
+    # PRIORITIZED ACTION PLAN
+    # Build a list of actions sorted by impact, with priority numbering
+    # =====================================================================
+    $script:ActionPlanPanel.Children.Clear()
+    $actions = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # --- Critical: Tag coverage ---
+    if ($d.Tags -and $d.Tags.TagCoverage -lt 50) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 1; Impact = 'Critical'; Category = 'Allocation'
+            Title = "Increase tag coverage from $($d.Tags.TagCoverage)% to 80%+"
+            Detail = 'Untagged resources cannot be allocated to business units. Use Azure Policy to enforce tagging at resource creation. Start with CostCenter, Environment, and Application tags.'
+        })
+    } elseif ($d.Tags -and $d.Tags.TagCoverage -lt 80) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 2; Impact = 'High'; Category = 'Allocation'
+            Title = "Improve tag coverage from $($d.Tags.TagCoverage)% to 80%+"
+            Detail = 'Good progress on tagging. Focus on untagged resources using Azure Policy tag inheritance and the Deploy Missing Tags feature on the Tags tab.'
+        })
+    }
+
+    # --- Critical: No budgets ---
+    if (-not $d.Budgets -or -not $d.Budgets.HasData) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 1; Impact = 'Critical'; Category = 'Budgeting'
+            Title = 'Set up Azure Budgets with alert thresholds'
+            Detail = 'No budgets detected. Create budgets at the subscription level with 50%, 75%, 90%, and 100% alert thresholds. Use action groups to notify finance and engineering teams.'
+        })
+    } elseif ($d.Budgets.BudgetCoverage -lt 50) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 2; Impact = 'High'; Category = 'Budgeting'
+            Title = "Expand budget coverage from $($d.Budgets.BudgetCoverage)% to 100%"
+            Detail = "Only $($d.Budgets.SubsWithBudget) of $($d.Budgets.SubsWithBudget + $d.Budgets.SubsWithoutBudget) subscriptions have budgets. Every production subscription should have an Azure Budget."
+        })
+    }
+
+    # --- High: Over-budget subscriptions ---
+    if ($d.Budgets -and $d.Budgets.OverBudgetCount -gt 0) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 1; Impact = 'Critical'; Category = 'Budgeting'
+            Title = "$($d.Budgets.OverBudgetCount) subscription(s) are over budget"
+            Detail = 'Investigate the over-budget subscriptions on the Overview tab. Check for unexpected scaling events, new resource deployments, or pricing changes.'
+        })
+    }
+
+    # --- High: Missing required tags ---
+    if ($d.TagRecs -and $d.TagRecs.MissingRequired.Count -gt 0) {
+        $names = ($d.TagRecs.MissingRequired | ForEach-Object { $_.TagName }) -join ', '
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 2; Impact = 'High'; Category = 'Allocation'
+            Title = "Deploy missing required tags: $names"
+            Detail = 'Microsoft Cloud Adoption Framework requires these tags for chargeback/showback. Use the Tags tab to deploy them to subscriptions or resource groups.'
+        })
+    }
+
+    # --- High: No FinOps policies ---
+    if ($d.PolicyRecs -and $d.PolicyRecs.Missing.Count -gt 0) {
+        $missingCount = $d.PolicyRecs.Missing.Count
+        $totalPolicies = $d.PolicyRecs.Analysis.Count
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 2; Impact = 'High'; Category = 'Governance'
+            Title = "Deploy $missingCount of $totalPolicies recommended FinOps policies"
+            Detail = 'Azure Policy enforces cost governance at scale. Start with Audit mode to measure impact, then move to Deny for critical policies like allowed VM sizes and required tags. Use the Policy tab to deploy.'
+        })
+    }
+
+    # --- Medium: AHB opportunities ---
+    if ($d.AHB -and $d.AHB.TotalOpportunities -gt 0) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 3; Impact = 'Medium'; Category = 'Optimization'
+            Title = "Enable Azure Hybrid Benefit on $($d.AHB.TotalOpportunities) resource(s)"
+            Detail = 'If you have existing Windows Server or SQL Server licenses with Software Assurance, AHB saves 40-85% on compute. This is free money with no architectural changes.'
+        })
+    }
+
+    # --- Medium: Advisor recommendations ---
+    if ($d.Optimization -and $d.Optimization.TotalCount -gt 0) {
+        $estSavings = $d.Optimization.EstimatedAnnualSavings.ToString('N2')
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 3; Impact = 'Medium'; Category = 'Optimization'
+            Title = "$($d.Optimization.TotalCount) Advisor cost recommendations (est. $currency$estSavings/yr)"
+            Detail = 'Review Azure Advisor recommendations on the Optimization tab. Common quick wins: rightsize VMs, delete unused resources, shut down dev/test outside business hours.'
+        })
+    }
+
+    # --- Medium: Orphaned resources ---
+    if ($d.Orphans) {
+        $orphanTotal = if ($d.Orphans.TotalCount) { $d.Orphans.TotalCount } else { 0 }
+        if ($orphanTotal -gt 0) {
+            [void]$actions.Add([PSCustomObject]@{
+                Priority = 3; Impact = 'Medium'; Category = 'Optimization'
+                Title = "Clean up $orphanTotal orphaned/idle resource(s)"
+                Detail = 'Orphaned disks, unattached IPs, deallocated VMs, and empty App Service Plans cost money but serve no purpose. Review on the Optimization tab.'
+            })
+        }
+    }
+
+    # --- Medium: Reservation/SP advice ---
+    if ($d.Reservations -and ($d.Reservations.TotalAdvisorCount + $d.Reservations.TotalReservationCount) -gt 0) {
+        $riSavings = $d.Reservations.EstimatedAnnualSavings.ToString('N2')
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 3; Impact = 'Medium'; Category = 'Optimization'
+            Title = "Evaluate RI/Savings Plan opportunities (est. $currency$riSavings/yr)"
+            Detail = 'For steady-state workloads, Reserved Instances save 30-72% vs. pay-as-you-go. Savings Plans offer flexibility across VM families. Start with 1-year terms to reduce risk.'
+        })
+    }
+
+    # --- Lower: Commitment utilization ---
+    if ($d.Commitments -and $d.Commitments.HasData -and $d.Commitments.UnderutilizedRIs.Count -gt 0) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 4; Impact = 'Low'; Category = 'Optimization'
+            Title = "$($d.Commitments.UnderutilizedRIs.Count) underutilized reservation(s) (below 80%)"
+            Detail = 'Exchange or refund underperforming reservations. Azure allows one-time exchanges to better-fitting SKUs or regions. Target 80%+ utilization on all commitments.'
+        })
+    }
+
+    # --- No MG hierarchy = flat org ---
+    if (-not $d.Hierarchy -or -not $d.Hierarchy.RootGroup) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 4; Impact = 'Low'; Category = 'Governance'
+            Title = 'Set up Management Group hierarchy'
+            Detail = 'Management Groups enable policy inheritance and cost rollup at the organizational level. Structure as: Tenant Root > Platform / Landing Zones > Production / Dev / Sandbox.'
+        })
+    }
+
+    # --- Positive: Add encouragement for things done well ---
+    if ($d.Budgets -and $d.Budgets.HasData -and $d.Budgets.BudgetCoverage -ge 80) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 10; Impact = 'Strength'; Category = 'Budgeting'
+            Title = "Budget coverage is $($d.Budgets.BudgetCoverage)% - well governed"
+            Detail = 'Consider adding action groups that auto-scale down or shut off dev resources when budgets hit 90%.'
+        })
+    }
+    if ($d.Tags -and $d.Tags.TagCoverage -ge 80) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 10; Impact = 'Strength'; Category = 'Allocation'
+            Title = "Tag coverage at $($d.Tags.TagCoverage)% - strong cost allocation"
+            Detail = 'Next step: implement tag-based cost allocation rules in Cost Management to automatically distribute shared costs to business units.'
+        })
+    }
+    if ($d.PolicyInv -and $d.PolicyInv.AssignmentCount -gt 5) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 10; Impact = 'Strength'; Category = 'Governance'
+            Title = "$($d.PolicyInv.AssignmentCount) policies in place - governance foundation established"
+            Detail = 'Review compliance % on the Policy tab. Move Audit-mode policies to Deny for critical rules once compliance is above 90%.'
+        })
+    }
+    if ($d.Savings -and $d.Savings.TotalMonthly -gt 0) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 10; Impact = 'Strength'; Category = 'Optimization'
+            Title = "Already saving $currency$($d.Savings.TotalMonthly.ToString('N2'))/mo from commitments"
+            Detail = 'Great foundation. Monitor utilization monthly and consider expanding coverage as workloads stabilize.'
+        })
+    }
+
+    # Fall back if nothing
+    if ($actions.Count -eq 0) {
+        [void]$actions.Add([PSCustomObject]@{
+            Priority = 5; Impact = 'Info'; Category = 'General'
+            Title = 'Run a full scan with Cost Management Reader permissions for detailed recommendations'
+            Detail = 'The scanner needs cost and policy data to generate specific actions. Ensure the account has Reader + Cost Management Reader at the management group or subscription scope.'
+        })
+    }
+
+    # Sort: Critical first, Strength last
+    $sortedActions = @($actions | Sort-Object Priority, Category)
+    $impactToColor = @{
+        Critical = '#D13438'; High = '#FF8C00'; Medium = '#0078D4'
+        Low = '#666'; Info = '#888'; Strength = '#107C10'
+    }
+
+    $subtitle = "Based on your scan results, here are $($sortedActions.Count) recommendations in priority order."
+    if ($score -ge 70) { $subtitle += ' Your environment is in good shape - focus on the refinements below.' }
+    elseif ($score -ge 50) { $subtitle += ' You have a solid foundation - the items below will accelerate FinOps maturity.' }
+    else { $subtitle += ' Start with the Critical and High-impact items to build your FinOps foundation.' }
+    $script:ActionPlanSubtitle.Text = $subtitle
+
+    $actionNum = 0
+    foreach ($a in $sortedActions) {
+        $actionNum++
+        $color = if ($impactToColor.ContainsKey($a.Impact)) { $impactToColor[$a.Impact] } else { '#444' }
+
+        $actionBorder = [System.Windows.Controls.Border]::new()
+        $actionBorder.Background = [System.Windows.Media.Brushes]::White
+        $actionBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+        $actionBorder.Padding = [System.Windows.Thickness]::new(14, 10, 14, 10)
+        $actionBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
+        $actionBorder.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#E8E8E8')
+        $actionBorder.BorderThickness = [System.Windows.Thickness]::new(1)
+
+        $actionStack = [System.Windows.Controls.StackPanel]::new()
+
+        # Title line: #1 [Critical] Title
+        $titleLine = [System.Windows.Controls.TextBlock]::new()
+        $titleLine.TextWrapping = 'Wrap'
+        $titleLine.FontSize = 13
+        $titleLine.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+
+        $numRun = [System.Windows.Documents.Run]::new("#$actionNum  ")
+        $numRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#999')
+        $numRun.FontWeight = 'Bold'
+        $titleLine.Inlines.Add($numRun) | Out-Null
+
+        $tagRun = [System.Windows.Documents.Run]::new("[$($a.Impact)]  ")
+        $tagRun.FontWeight = 'Bold'
+        $tagRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($color)
+        $titleLine.Inlines.Add($tagRun) | Out-Null
+
+        $titleRun = [System.Windows.Documents.Run]::new($a.Title)
+        $titleRun.FontWeight = 'SemiBold'
+        $titleRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
+        $titleLine.Inlines.Add($titleRun) | Out-Null
+
+        $actionStack.Children.Add($titleLine) | Out-Null
+
+        # Detail line
+        $detailTb = [System.Windows.Controls.TextBlock]::new()
+        $detailTb.Text = $a.Detail
+        $detailTb.TextWrapping = 'Wrap'
+        $detailTb.FontSize = 12
+        $detailTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#555')
+        $actionStack.Children.Add($detailTb) | Out-Null
+
+        $actionBorder.Child = $actionStack
+        $script:ActionPlanPanel.Children.Add($actionBorder) | Out-Null
+    }
+
+    # =====================================================================
+    # UNDERSTAND PILLAR (rich formatted)
+    # =====================================================================
+    $script:UnderstandPanel.Children.Clear()
     if ($d.Tags) {
         if ($d.Tags.TagCoverage -lt 50) {
-            $understand += "[!] CRITICAL: Only $($d.Tags.TagCoverage)% of resources are tagged. Target 80%+ for meaningful cost allocation."
-        }
-        elseif ($d.Tags.TagCoverage -lt 80) {
-            $understand += "[!] Tag coverage is $($d.Tags.TagCoverage)%. Good progress, but aim for 80%+ to reduce unallocated costs."
-        }
-        else {
-            $understand += "[OK] Tag coverage is $($d.Tags.TagCoverage)% -- strong foundation for cost allocation."
+            Add-GuidanceLine -Panel $script:UnderstandPanel -Icon '!' -Bold 'CRITICAL:' -Normal "Only $($d.Tags.TagCoverage)% of resources are tagged. Target 80%+ for meaningful cost allocation. Use Azure Policy to auto-apply tags at resource creation." -Color '#D13438'
+        } elseif ($d.Tags.TagCoverage -lt 80) {
+            Add-GuidanceLine -Panel $script:UnderstandPanel -Icon '!' -Bold 'Tag coverage:' -Normal "$($d.Tags.TagCoverage)%. Good progress. Focus on the remaining untagged resources using tag inheritance policies." -Color '#FF8C00'
+        } else {
+            Add-GuidanceLine -Panel $script:UnderstandPanel -Icon '+' -Bold 'Tag coverage:' -Normal "$($d.Tags.TagCoverage)% - strong foundation for showback/chargeback." -Color '#107C10'
         }
     }
-    if ($d.TagRecs) {
-        $missing = $d.TagRecs.MissingRequired
-        if ($missing.Count -gt 0) {
-            $names = ($missing | ForEach-Object { $_.TagName }) -join ', '
-            $understand += "[!] Missing REQUIRED tags: $names. These are essential for chargeback/showback."
-        }
+    if ($d.TagRecs -and $d.TagRecs.MissingRequired.Count -gt 0) {
+        $names = ($d.TagRecs.MissingRequired | ForEach-Object { $_.TagName }) -join ', '
+        Add-GuidanceLine -Panel $script:UnderstandPanel -Icon '!' -Bold 'Missing required tags:' -Normal "$names. These are essential for cost allocation per Microsoft CAF." -Color '#D13438'
     }
     if ($d.CostByTag -and $d.CostByTag.NoTagsFound) {
-        $understand += "[!] No cost-allocation tags detected. All spend is unallocated -- finance teams cannot attribute costs to business units."
+        Add-GuidanceLine -Panel $script:UnderstandPanel -Icon '!' -Bold 'No cost-allocation tags found.' -Normal 'All spend is unallocated. Finance teams cannot attribute costs to business units without CostCenter, Environment, or Application tags.' -Color '#D13438'
     }
-    if ($understand.Count -eq 0) { $understand += "[OK] Cost visibility fundamentals look good." }
-    $script:UnderstandText.Text = $understand -join "`n`n"
+    if ($d.Tags -and $d.Tags.TagCoverage -ge 80 -and ($d.TagRecs -and $d.TagRecs.MissingRequired.Count -eq 0)) {
+        Add-GuidanceLine -Panel $script:UnderstandPanel -Icon '+' -Bold 'Cost visibility is strong.' -Normal 'Tags are well-deployed and CAF-compliant. Consider implementing tag-based cost allocation rules for shared resources.' -Color '#107C10'
+    }
 
-    # -- Quantify Pillar ------------------------------------------------
-    $quantify = @()
+    # =====================================================================
+    # QUANTIFY PILLAR (rich formatted)
+    # =====================================================================
+    $script:QuantifyPanel.Children.Clear()
     $totalActual = 0; $totalForecast = 0
     if ($d.Costs) {
         foreach ($entry in $d.Costs.GetEnumerator()) {
@@ -692,73 +1168,125 @@ function Populate-GuidanceTab {
             $totalForecast += $entry.Value.Forecast
         }
     }
-
-    # Day-of-month awareness: forecasts are unreliable early in the billing period
     $dayOfMonth = (Get-Date).Day
     $daysInMonth = [DateTime]::DaysInMonth((Get-Date).Year, (Get-Date).Month)
     $pctMonthElapsed = [math]::Round(($dayOfMonth / $daysInMonth) * 100, 0)
 
     if ($dayOfMonth -le 3) {
-        $quantify += "[INFO] It is day $dayOfMonth of the billing period ($pctMonthElapsed% elapsed). Forecast comparisons are less meaningful this early in the month."
-        if ($totalForecast -gt 0) {
-            $quantify += "[INFO] Azure Cost Management forecasts $currency$($totalForecast.ToString('N2')) for the full month (MTD actual: $currency$($totalActual.ToString('N2')))."
-        }
-    }
-    elseif ($dayOfMonth -le 7) {
-        $quantify += "[INFO] Early in the billing period (day $dayOfMonth, $pctMonthElapsed% elapsed). Forecast accuracy improves after week 1."
-        if ($totalForecast -gt 0) {
-            $quantify += "[INFO] Current forecast: $currency$($totalForecast.ToString('N2')) for the full month (MTD actual: $currency$($totalActual.ToString('N2')))."
-        }
-    }
-    else {
+        Add-GuidanceLine -Panel $script:QuantifyPanel -Icon 'i' -Bold "Day $dayOfMonth of billing period ($pctMonthElapsed% elapsed)." -Normal 'Forecasts are less reliable this early. Check back after day 7 for more accurate projections.' -Color '#0078D4'
+    } elseif ($dayOfMonth -le 7) {
+        Add-GuidanceLine -Panel $script:QuantifyPanel -Icon 'i' -Bold "Early in billing period (day $dayOfMonth)." -Normal 'Forecast accuracy improves after week 1.' -Color '#0078D4'
+    } else {
         if ($totalActual -gt 0 -and $totalForecast -gt $totalActual * 1.2) {
             $increase = [math]::Round((($totalForecast - $totalActual) / $totalActual) * 100, 0)
-            $quantify += "[!] Forecast ($currency$($totalForecast.ToString('N2'))) is $increase% above current MTD spend ($currency$($totalActual.ToString('N2'))) on day $dayOfMonth/$daysInMonth. Review scaling patterns and set up Azure Budgets with alerts."
-        }
-        elseif ($totalForecast -gt 0) {
-            $quantify += "[OK] Forecast ($currency$($totalForecast.ToString('N2'))) is within 20% of current spend -- costs appear stable this month (day $dayOfMonth/$daysInMonth)."
+            Add-GuidanceLine -Panel $script:QuantifyPanel -Icon '!' -Bold "Forecast is $increase% above MTD spend." -Normal "$currency$($totalForecast.ToString('N2')) projected vs $currency$($totalActual.ToString('N2')) actual on day $dayOfMonth/$daysInMonth. Review scaling patterns and set budget alerts." -Color '#FF8C00'
+        } elseif ($totalForecast -gt 0) {
+            Add-GuidanceLine -Panel $script:QuantifyPanel -Icon '+' -Bold 'Costs appear stable.' -Normal "Forecast $currency$($totalForecast.ToString('N2')) is within 20% of MTD spend on day $dayOfMonth/$daysInMonth." -Color '#107C10'
         }
     }
-    $quantify += "[TIP] Set Azure Budgets at the subscription or resource group level to get email/action alerts before overspend."
-    $quantify += "[TIP] Use Cost Management Exports to send daily/monthly cost data to a Storage Account for Power BI dashboards."
-    $script:QuantifyText.Text = $quantify -join "`n`n"
+    if ($totalForecast -gt 0) {
+        Add-GuidanceLine -Panel $script:QuantifyPanel -Icon 'i' -Bold "Current forecast:" -Normal "$currency$($totalForecast.ToString('N2')) for the full month (MTD actual: $currency$($totalActual.ToString('N2')))." -Color '#0078D4'
+    }
+    if (-not $d.Budgets -or -not $d.Budgets.HasData) {
+        Add-GuidanceLine -Panel $script:QuantifyPanel -Icon '!' -Bold 'No Azure Budgets detected.' -Normal 'Set budgets at subscription or resource group level with 50%, 75%, 90%, 100% thresholds. Use action groups for email + auto-shutdown.' -Color '#D13438'
+    } else {
+        Add-GuidanceLine -Panel $script:QuantifyPanel -Icon '+' -Bold "Budget coverage: $($d.Budgets.BudgetCoverage)%." -Normal "$($d.Budgets.SubsWithBudget) subscription(s) have budgets configured." -Color '#107C10'
+    }
+    Add-GuidanceLine -Panel $script:QuantifyPanel -Icon '>' -Bold 'TIP:' -Normal 'Use Cost Management Exports to send daily/monthly cost data to a Storage Account for Power BI dashboards and FinOps reporting.' -Color '#8764B8'
 
-    # -- Optimize Pillar ------------------------------------------------
-    $optimize = @()
+    # =====================================================================
+    # OPTIMIZE PILLAR (rich formatted)
+    # =====================================================================
+    $script:OptimizePanel.Children.Clear()
     if ($d.AHB -and $d.AHB.TotalOpportunities -gt 0) {
-        $optimize += "[!] $($d.AHB.TotalOpportunities) resources can enable Azure Hybrid Benefit (AHB). If you have existing Windows Server or SQL Server licenses with Software Assurance, AHB can save 40-85%."
+        Add-GuidanceLine -Panel $script:OptimizePanel -Icon '$' -Bold "$($d.AHB.TotalOpportunities) AHB opportunity(s)." -Normal 'Apply Azure Hybrid Benefit to save 40-85% if you have existing Windows/SQL licenses with Software Assurance. Zero architectural change required.' -Color '#107C10'
     }
     if ($d.Reservations -and ($d.Reservations.TotalAdvisorCount + $d.Reservations.TotalReservationCount) -gt 0) {
-        $riTotal = $d.Reservations.TotalAdvisorCount + $d.Reservations.TotalReservationCount
         $riSavings = $d.Reservations.EstimatedAnnualSavings.ToString('N2')
-        $optimize += "[$$] $riTotal reservation/savings plan opportunities found. Est. `$$riSavings/yr savings by committing to 1- or 3-year terms."
+        Add-GuidanceLine -Panel $script:OptimizePanel -Icon '$' -Bold "RI/SP opportunities: est. $currency$riSavings/yr savings." -Normal 'For steady-state workloads, commit to 1-year terms first to reduce risk. Savings Plans offer VM family flexibility.' -Color '#107C10'
     }
     if ($d.Optimization -and $d.Optimization.TotalCount -gt 0) {
         foreach ($cat in $d.Optimization.ByCategory) {
             $catSavings = $cat.TotalSavings.ToString('N2')
-            $optimize += "[FIX] $($cat.Count) $($cat.Category) recommendations (est. `$$catSavings/yr)"
+            Add-GuidanceLine -Panel $script:OptimizePanel -Icon '>' -Bold "$($cat.Count) $($cat.Category) recommendation(s)" -Normal "(est. $currency$catSavings/yr). Review details on the Optimization tab." -Color '#0078D4'
         }
     }
     if ($d.Contract) {
         $type = $d.Contract[0].AgreementType
         if ($type -eq 'MicrosoftOnlineServicesProgram') {
-            $optimize += "[!] PAYGO account detected. Consider moving to an Enterprise Agreement (EA) or Microsoft Customer Agreement (MCA) for volume discounts and better rate optimization tools."
+            Add-GuidanceLine -Panel $script:OptimizePanel -Icon '!' -Bold 'Pay-As-You-Go (PAYGO) account detected.' -Normal 'Consider an Enterprise Agreement (EA) or Microsoft Customer Agreement (MCA) for volume discounts, negotiated rates, and better cost management tooling.' -Color '#FF8C00'
         }
     }
-    if ($optimize.Count -eq 0) { $optimize += "[OK] No major optimization gaps detected." }
-    $script:OptimizeText.Text = $optimize -join "`n`n"
+    if ($d.Savings -and $d.Savings.TotalMonthly -gt 0) {
+        Add-GuidanceLine -Panel $script:OptimizePanel -Icon '+' -Bold "Already saving $currency$($d.Savings.TotalMonthly.ToString('N2'))/mo" -Normal 'from existing reservations, savings plans, and/or AHB. Monitor utilization monthly.' -Color '#107C10'
+    }
+    if ($script:OptimizePanel.Children.Count -eq 0) {
+        Add-GuidanceLine -Panel $script:OptimizePanel -Icon '+' -Bold 'No major optimization gaps detected.' -Normal 'Continue monitoring Azure Advisor and Cost Management for new opportunities.' -Color '#107C10'
+    }
 
-    # -- References -----------------------------------------------------
-    $refs = @(
-        "- FinOps Framework: https://www.finops.org/framework/"
-        "- Azure FinOps Toolkit: https://aka.ms/finops/toolkit"
-        "- Cloud Adoption Framework - Tagging: https://aka.ms/tagging"
-        "- Azure Cost Management: https://learn.microsoft.com/en-us/azure/cost-management-billing/"
-        "- Azure Advisor: https://learn.microsoft.com/en-us/azure/advisor/"
-        "- Azure Hybrid Benefit: https://learn.microsoft.com/en-us/azure/azure-sql/azure-hybrid-benefit"
-        "- Reservations: https://learn.microsoft.com/en-us/azure/cost-management-billing/reservations/"
+    # =====================================================================
+    # PERSONAS - FinOps Foundation defined roles
+    # =====================================================================
+    $script:PersonasPanel.Children.Clear()
+    $personas = @(
+        @{ Role = 'FinOps Practitioner'; Desc = 'Drives the FinOps practice: runs cost reviews, manages tooling, builds reports, educates teams. Often the first hire for a FinOps program.'; When = 'Always needed' }
+        @{ Role = 'Engineering / DevOps Lead'; Desc = 'Implements rightsizing, AHB, auto-shutdown, and tagging at the resource level. Owns technical optimization actions.'; When = 'Always needed' }
+        @{ Role = 'Finance / Procurement'; Desc = 'Manages budgets, forecasts, commitment purchases (RIs/SPs), and licensing agreements. Owns the commercial relationship.'; When = 'Always needed' }
+        @{ Role = 'Executive Sponsor (VP/Director)'; Desc = 'Champions FinOps across the organization, breaks down silos between finance and engineering, approves commitment purchases.'; When = 'Critical for organizational buy-in' }
+        @{ Role = 'Cloud Architect'; Desc = 'Designs cost-efficient architectures, evaluates PaaS vs IaaS trade-offs, and ensures workloads are right-sized from the start.'; When = 'During design reviews and migrations' }
+        @{ Role = 'Business Unit Owners'; Desc = 'Consume cost reports (showback/chargeback), validate tag accuracy, and make build-vs-buy decisions for their teams.'; When = 'For cost allocation and accountability' }
     )
-    $script:ReferencesText.Text = $refs -join "`n"
+    foreach ($p in $personas) {
+        $personaTb = [System.Windows.Controls.TextBlock]::new()
+        $personaTb.TextWrapping = 'Wrap'
+        $personaTb.FontSize = 12.5
+        $personaTb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
+
+        $roleRun = [System.Windows.Documents.Run]::new("$($p.Role):  ")
+        $roleRun.FontWeight = 'Bold'
+        $roleRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
+        $personaTb.Inlines.Add($roleRun) | Out-Null
+
+        $descRun = [System.Windows.Documents.Run]::new($p.Desc)
+        $descRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#444')
+        $personaTb.Inlines.Add($descRun) | Out-Null
+
+        $whenRun = [System.Windows.Documents.Run]::new("  ($($p.When))")
+        $whenRun.FontStyle = 'Italic'
+        $whenRun.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#888')
+        $personaTb.Inlines.Add($whenRun) | Out-Null
+
+        $script:PersonasPanel.Children.Add($personaTb) | Out-Null
+    }
+
+    # =====================================================================
+    # REFERENCES (rich formatted, selectable)
+    # =====================================================================
+    $script:ReferencesPanel.Children.Clear()
+    $refs = @(
+        @{ Label = 'FinOps Foundation Framework'; Url = 'https://www.finops.org/framework/' }
+        @{ Label = 'FinOps Foundation Maturity Model'; Url = 'https://www.finops.org/framework/maturity-model/' }
+        @{ Label = 'FinOps Foundation Personas'; Url = 'https://www.finops.org/framework/personas/' }
+        @{ Label = 'Azure FinOps Toolkit'; Url = 'https://aka.ms/finops/toolkit' }
+        @{ Label = 'Microsoft Cloud Adoption Framework - Tagging'; Url = 'https://aka.ms/tagging' }
+        @{ Label = 'Azure Cost Management'; Url = 'https://learn.microsoft.com/en-us/azure/cost-management-billing/' }
+        @{ Label = 'Azure Advisor'; Url = 'https://learn.microsoft.com/en-us/azure/advisor/' }
+        @{ Label = 'Azure Hybrid Benefit'; Url = 'https://learn.microsoft.com/en-us/azure/azure-sql/azure-hybrid-benefit' }
+        @{ Label = 'Azure Reservations'; Url = 'https://learn.microsoft.com/en-us/azure/cost-management-billing/reservations/' }
+        @{ Label = 'Azure Policy Built-in Definitions'; Url = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies' }
+    )
+    foreach ($ref in $refs) {
+        $refTb = [System.Windows.Controls.TextBox]::new()
+        $refTb.Text = "$($ref.Label): $($ref.Url)"
+        $refTb.FontSize = 12
+        $refTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4')
+        $refTb.IsReadOnly = $true
+        $refTb.BorderThickness = [System.Windows.Thickness]::new(0)
+        $refTb.Background = [System.Windows.Media.Brushes]::Transparent
+        $refTb.Cursor = [System.Windows.Input.Cursors]::IBeam
+        $refTb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 2)
+        $script:ReferencesPanel.Children.Add($refTb) | Out-Null
+    }
 }
 
 #-----------------------------------------------------------------------

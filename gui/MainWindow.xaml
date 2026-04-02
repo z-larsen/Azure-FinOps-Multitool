@@ -499,22 +499,33 @@
                 <TabItem Header="  FinOps Guidance  " FontSize="13">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
                         <StackPanel x:Name="GuidancePanel">
-                            <TextBlock Text="FinOps Maturity Assessment" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock x:Name="GuidanceText" TextWrapping="Wrap" FontSize="13" Foreground="#333"
-                                       Text="Scan results will generate FinOps guidance here based on the three pillars: Understand, Quantify, and Optimize."/>
+                            <!-- Score card area - populated dynamically -->
+                            <StackPanel x:Name="GuidanceScorePanel" Margin="0,0,0,10"/>
 
+                            <!-- Prioritized Action Plan -->
+                            <TextBlock Text="Prioritized Action Plan" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="ActionPlanSubtitle" TextWrapping="Wrap" FontSize="12.5" Foreground="#666" Margin="0,0,0,10"/>
+                            <StackPanel x:Name="ActionPlanPanel" Margin="0,0,0,10"/>
+
+                            <!-- Understand Pillar -->
                             <TextBlock Text="Understand (Cost Visibility &amp; Allocation)" Style="{StaticResource SectionHeader}" Foreground="#0078D4"/>
-                            <TextBlock x:Name="UnderstandText" TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,10"/>
+                            <StackPanel x:Name="UnderstandPanel" Margin="0,0,0,10"/>
 
+                            <!-- Quantify Pillar -->
                             <TextBlock Text="Quantify (Budgeting &amp; Forecasting)" Style="{StaticResource SectionHeader}" Foreground="#8764B8"/>
-                            <TextBlock x:Name="QuantifyText" TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,10"/>
+                            <StackPanel x:Name="QuantifyPanel" Margin="0,0,0,10"/>
 
+                            <!-- Optimize Pillar -->
                             <TextBlock Text="Optimize (Rate &amp; Usage Optimization)" Style="{StaticResource SectionHeader}" Foreground="#107C10"/>
-                            <TextBlock x:Name="OptimizeText" TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,10"/>
+                            <StackPanel x:Name="OptimizePanel" Margin="0,0,0,10"/>
 
+                            <!-- Key Personas -->
+                            <TextBlock Text="FinOps Personas to Engage" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel x:Name="PersonasPanel" Margin="0,0,0,10"/>
+
+                            <!-- References -->
                             <TextBlock Text="References" Style="{StaticResource SectionHeader}"/>
-                            <TextBox x:Name="ReferencesText" TextWrapping="Wrap" FontSize="12" Foreground="#0078D4" Margin="0,0,0,10"
-                                     IsReadOnly="True" BorderThickness="0" Background="Transparent" Cursor="IBeam"/>
+                            <StackPanel x:Name="ReferencesPanel" Margin="0,0,0,10"/>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
