@@ -2617,18 +2617,29 @@ $script:TagDeployButton.Add_Click({
     $scope = $script:tagDeployScopes[$selectedIdx].Scope
     $script:TagDeployStatus.Text = 'Deploying...'
     $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-        [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
-    )
+    $script:TagDeployButton.IsEnabled = $false
 
-    $result = Deploy-ResourceTag -Scope $scope -TagName $tagName -TagValue $tagValue
-    if ($result.Success) {
-        $script:TagDeployStatus.Text = "Deployed: $tagName=$tagValue"
-        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
-    } else {
-        $script:TagDeployStatus.Text = "Failed: $($result.Message)"
-        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-    }
+    $worker = [System.ComponentModel.BackgroundWorker]::new()
+    $tName = $tagName; $tValue = $tagValue; $tScope = $scope
+    $worker.Add_DoWork({
+        param($s, $e)
+        $e.Result = Deploy-ResourceTag -Scope $tScope -TagName $tName -TagValue $tValue
+    }.GetNewClosure())
+    $worker.Add_RunWorkerCompleted({
+        param($s, $e)
+        $script:TagDeployButton.IsEnabled = $true
+        if ($e.Error) {
+            $script:TagDeployStatus.Text = "Failed: $($e.Error.Message)"
+            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        } elseif ($e.Result.Success) {
+            $script:TagDeployStatus.Text = "Deployed: $tName=$tValue"
+            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+        } else {
+            $script:TagDeployStatus.Text = "Failed: $($e.Result.Message)"
+            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        }
+    }.GetNewClosure())
+    $worker.RunWorkerAsync()
 })
 
 # Tag Deploy Cancel Button
@@ -2683,18 +2694,29 @@ $script:PolicyDeployButton.Add_Click({
 
     $script:PolicyDeployStatus.Text = 'Deploying...'
     $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-        [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
-    )
+    $script:PolicyDeployButton.IsEnabled = $false
 
-    $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $defId -Effect $effect -DisplayName $displayName -AdditionalParameters $additionalParams
-    if ($result.Success) {
-        $script:PolicyDeployStatus.Text = "Deployed: $displayName ($effect)"
-        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
-    } else {
-        $script:PolicyDeployStatus.Text = "Failed: $($result.Message)"
-        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-    }
+    $pScope = $scope; $pDefId = $defId; $pEffect = $effect; $pName = $displayName; $pAdditional = $additionalParams
+    $worker = [System.ComponentModel.BackgroundWorker]::new()
+    $worker.Add_DoWork({
+        param($s, $e)
+        $e.Result = Deploy-PolicyAssignment -Scope $pScope -PolicyDefinitionId $pDefId -Effect $pEffect -DisplayName $pName -AdditionalParameters $pAdditional
+    }.GetNewClosure())
+    $worker.Add_RunWorkerCompleted({
+        param($s, $e)
+        $script:PolicyDeployButton.IsEnabled = $true
+        if ($e.Error) {
+            $script:PolicyDeployStatus.Text = "Failed: $($e.Error.Message)"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        } elseif ($e.Result.Success) {
+            $script:PolicyDeployStatus.Text = "Deployed: $pName ($pEffect)"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+        } else {
+            $script:PolicyDeployStatus.Text = "Failed: $($e.Result.Message)"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        }
+    }.GetNewClosure())
+    $worker.RunWorkerAsync()
 })
 
 # Policy Deploy Cancel Button
