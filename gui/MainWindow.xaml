@@ -210,6 +210,16 @@
                 <TabItem Header="  Cost Analysis  " FontSize="13">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
                         <StackPanel x:Name="CostPanel">
+
+                            <!-- 6-Month Cost Trend Chart -->
+                            <TextBlock Text="6-Month Cost Trend" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="TrendNote" Text="" FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <Border Background="White" CornerRadius="4" Padding="12" Margin="0,0,0,20"
+                                    BorderBrush="#DDD" BorderThickness="1">
+                                <Canvas x:Name="TrendChart" Height="220" ClipToBounds="True"/>
+                            </Border>
+
+                            <!-- Cost by Tag -->
                             <TextBlock x:Name="CostByTagHeader" Text="Cost by Tag" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="CostByTagDesc" Text="Select a tag below to see cost distribution." FontSize="12" Foreground="#666" Margin="0,0,0,10"/>
                             <ComboBox x:Name="TagSelector" Width="250" HorizontalAlignment="Left" Margin="0,0,0,15" FontSize="12" Padding="6,4"/>
@@ -254,7 +264,30 @@
                             <!-- Tag Recommendations -->
                             <TextBlock Text="Tag Recommendations (Cloud Adoption Framework)" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="TagComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>
-                            <DataGrid x:Name="TagRecsGrid" MaxHeight="300"/>
+                            <DataGrid x:Name="TagRecsGrid" MaxHeight="200"/>
+
+                            <!-- Deploy Missing Tags -->
+                            <TextBlock Text="Deploy Missing Tags" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Click a missing tag below to deploy it to a subscription or resource group." FontSize="12" Foreground="#666" Margin="0,0,0,8"/>
+                            <WrapPanel x:Name="MissingTagButtons" Margin="0,0,0,12"/>
+
+                            <!-- Tag Deploy Dialog (inline, hidden by default) -->
+                            <Border x:Name="TagDeployPanel" Background="#F8F8F8" CornerRadius="4" Padding="16" Margin="0,0,0,10"
+                                    BorderBrush="#0078D4" BorderThickness="1" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock x:Name="TagDeployTitle" Text="" FontSize="14" FontWeight="SemiBold" Foreground="#0078D4" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Scope (subscription or resource group):" FontSize="12" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="TagScopeSelector" Width="500" HorizontalAlignment="Left" FontSize="12" Padding="6,4" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Tag Value:" FontSize="12" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TagValueInput" Width="300" HorizontalAlignment="Left" FontSize="12" Padding="6,4" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="TagDeployButton" Content="Deploy Tag" Style="{StaticResource AzureButton}"
+                                                Background="#0078D4" Foreground="White" Margin="0,0,10,0"/>
+                                        <Button x:Name="TagDeployCancelButton" Content="Cancel" Style="{StaticResource AzureButton}" Margin="0,0,10,0"/>
+                                        <TextBlock x:Name="TagDeployStatus" Text="" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
 
                         </StackPanel>
                     </ScrollViewer>
@@ -319,6 +352,34 @@
                             <TextBlock Text="Advisor Cost Recommendations" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
                             <TextBlock Text="Azure Advisor analyzes your resource usage patterns and identifies wasteful spend: idle VMs, oversized resources, orphaned disks, and underutilized services. These are quick wins that reduce cost without any commitment." FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,8"/>
                             <DataGrid x:Name="AdvisorGrid" MaxHeight="250"/>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Billing Tab ================================== -->
+                <TabItem Header="  Billing  " FontSize="13">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                        <StackPanel x:Name="BillingPanel">
+
+                            <TextBlock Text="Billing Accounts" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="BillingAccessNote" Text="" FontSize="12" Foreground="#D83B01" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                            <DataGrid x:Name="BillingAccountsGrid" MaxHeight="180"/>
+
+                            <TextBlock Text="Billing Profiles" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="MCA/MPA billing profiles control payment methods and invoice generation." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <DataGrid x:Name="BillingProfilesGrid" MaxHeight="200"/>
+
+                            <TextBlock Text="Invoice Sections" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Invoice sections organize charges within a billing profile (MCA)." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <DataGrid x:Name="InvoiceSectionsGrid" MaxHeight="200"/>
+
+                            <TextBlock x:Name="EADeptHeader" Text="EA Departments" Style="{StaticResource SectionHeader}" Visibility="Collapsed"/>
+                            <DataGrid x:Name="EADeptGrid" MaxHeight="200" Visibility="Collapsed"/>
+
+                            <TextBlock Text="Cost Allocation Rules" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Cost allocation rules redistribute shared costs (e.g., networking, management tools) across target subscriptions or resource groups." FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                            <DataGrid x:Name="CostAllocationGrid" MaxHeight="200"/>
 
                         </StackPanel>
                     </ScrollViewer>

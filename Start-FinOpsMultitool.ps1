@@ -35,6 +35,9 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Get-ReservationAdvice.ps1')
 . (Join-Path $modulePath 'Get-OptimizationAdvice.ps1')
 . (Join-Path $modulePath 'Get-TagRecommendations.ps1')
+. (Join-Path $modulePath 'Get-CostTrend.ps1')
+. (Join-Path $modulePath 'Deploy-ResourceTag.ps1')
+. (Join-Path $modulePath 'Get-BillingStructure.ps1')
 
 # -- Load XAML ----------------------------------------------------------
 $xamlPath = Join-Path $PSScriptRoot 'gui\MainWindow.xaml'
@@ -58,15 +61,22 @@ $controls = @(
     'ResourceCostGrid',
     'ResourceCountNote',
     # Cost Analysis
+    'TrendChart', 'TrendNote',
     'TagSelector', 'CostByTagGrid', 'NoTagsLabel',
     # Tags
     'TagCountText', 'TagCoverageText', 'UntaggedCountText',
     'TagInventoryGrid', 'TagComplianceText', 'TagRecsGrid',
+    'MissingTagButtons', 'TagDeployPanel', 'TagDeployTitle',
+    'TagScopeSelector', 'TagValueInput', 'TagDeployButton',
+    'TagDeployCancelButton', 'TagDeployStatus',
     # Optimization
     'AHBCountText', 'AHBDetailText', 'RICountText', 'RISavingsText',
     'SPCountText', 'SPSavingsText', 'RIContractNote', 'SPContractNote',
     'AdvisorCountText', 'AdvisorSavingsText', 'AHBSummaryText',
     'AHBGrid', 'RIGrid', 'SPGrid', 'AdvisorGrid',
+    # Billing
+    'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
+    'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
     # Guidance
     'UnderstandText', 'QuantifyText', 'OptimizeText', 'ReferencesText'
 )
@@ -85,10 +95,12 @@ $script:scanData = @{
     ResourceCosts = $null
     Tags          = $null
     CostByTag     = $null
+    CostTrend     = $null
     AHB           = $null
     Reservations  = $null
     Optimization  = $null
     TagRecs       = $null
+    Billing       = $null
 }
 
 ###########################################################################
@@ -699,6 +711,247 @@ function Populate-GuidanceTab {
     $script:ReferencesText.Text = $refs -join "`n"
 }
 
+#-----------------------------------------------------------------------
+# COST TREND BAR CHART (pure WPF Canvas drawing)
+#-----------------------------------------------------------------------
+function Populate-TrendChart {
+    $d = $script:scanData.CostTrend
+    if (-not $d -or -not $d.HasData) {
+        $script:TrendNote.Text = "No cost trend data available."
+        return
+    }
+
+    $months  = $d.Months
+    $canvas  = $script:TrendChart
+    $canvas.Children.Clear()
+
+    $currency = if ($months[0].Currency) { Get-CurrencySymbol -Code $months[0].Currency } else { '$' }
+    $maxCost = ($months | Measure-Object -Property Cost -Maximum).Maximum
+    if ($maxCost -le 0) { $maxCost = 1 }
+
+    $canvasW  = 900
+    $canvasH  = 200
+    $barGap   = 12
+    $labelH   = 30
+    $chartH   = $canvasH - $labelH
+    $barCount = $months.Count
+    $barW     = [math]::Floor(($canvasW - ($barGap * ($barCount + 1))) / $barCount)
+    if ($barW -gt 120) { $barW = 120 }
+
+    $colors = @('#0078D4', '#005A9E', '#0063B1', '#2B88D8', '#106EBE', '#004578')
+
+    for ($i = 0; $i -lt $barCount; $i++) {
+        $m = $months[$i]
+        $barH = [math]::Max(([math]::Round(($m.Cost / $maxCost) * $chartH, 0)), 2)
+        $x = $barGap + ($i * ($barW + $barGap))
+        $y = $chartH - $barH
+
+        # Bar rectangle
+        $rect = [System.Windows.Shapes.Rectangle]::new()
+        $rect.Width  = $barW
+        $rect.Height = $barH
+        $rect.Fill   = [System.Windows.Media.BrushConverter]::new().ConvertFromString($colors[$i % $colors.Count])
+        $rect.RadiusX = 3
+        $rect.RadiusY = 3
+        [System.Windows.Controls.Canvas]::SetLeft($rect, $x)
+        [System.Windows.Controls.Canvas]::SetTop($rect, $y)
+        $canvas.Children.Add($rect) | Out-Null
+
+        # Cost label above bar
+        $costLabel = [System.Windows.Controls.TextBlock]::new()
+        $costLabel.Text = "$currency$($m.Cost.ToString('N0'))"
+        $costLabel.FontSize = 10
+        $costLabel.Foreground = [System.Windows.Media.Brushes]::Gray
+        $costLabel.TextAlignment = 'Center'
+        $costLabel.Width = $barW
+        [System.Windows.Controls.Canvas]::SetLeft($costLabel, $x)
+        [System.Windows.Controls.Canvas]::SetTop($costLabel, [math]::Max($y - 16, 0))
+        $canvas.Children.Add($costLabel) | Out-Null
+
+        # Month label below bar
+        $monthLabel = [System.Windows.Controls.TextBlock]::new()
+        $monthLabel.Text = $m.Month
+        $monthLabel.FontSize = 10
+        $monthLabel.FontWeight = 'SemiBold'
+        $monthLabel.Foreground = [System.Windows.Media.Brushes]::DimGray
+        $monthLabel.TextAlignment = 'Center'
+        $monthLabel.Width = $barW
+        [System.Windows.Controls.Canvas]::SetLeft($monthLabel, $x)
+        [System.Windows.Controls.Canvas]::SetTop($monthLabel, $chartH + 4)
+        $canvas.Children.Add($monthLabel) | Out-Null
+    }
+
+    # Trend note
+    $firstCost = $months[0].Cost
+    $lastCost  = $months[$months.Count - 1].Cost
+    if ($firstCost -gt 0) {
+        $changePct = [math]::Round((($lastCost - $firstCost) / $firstCost) * 100, 1)
+        $direction = if ($changePct -gt 0) { "up" } elseif ($changePct -lt 0) { "down" } else { "flat" }
+        $script:TrendNote.Text = "6-month trend: $currency$($firstCost.ToString('N2')) -> $currency$($lastCost.ToString('N2')) ($direction $([math]::Abs($changePct))%)"
+    } else {
+        $script:TrendNote.Text = ""
+    }
+}
+
+#-----------------------------------------------------------------------
+# TAG DEPLOYMENT UI WIRING
+#-----------------------------------------------------------------------
+$script:tagDeployCurrentTag = $null
+$script:tagDeployScopesLoaded = $false
+$script:tagDeployScopes = @()
+
+function Show-TagDeployPanel {
+    param([string]$TagName)
+
+    $script:tagDeployCurrentTag = $TagName
+    $script:TagDeployTitle.Text = "Deploy tag: $TagName"
+    $script:TagDeployStatus.Text = ''
+    $script:TagValueInput.Text = ''
+    $script:TagDeployPanel.Visibility = 'Visible'
+
+    # Load scopes lazily (once per scan)
+    if (-not $script:tagDeployScopesLoaded -and $script:scanData.Auth) {
+        $script:TagDeployStatus.Text = 'Loading scopes...'
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+            [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
+        )
+        $script:tagDeployScopes = Get-TagScopes -Subscriptions $script:scanData.Auth.Subscriptions
+        $script:tagDeployScopesLoaded = $true
+        $script:TagDeployStatus.Text = ''
+    }
+
+    $script:TagScopeSelector.Items.Clear()
+    foreach ($s in $script:tagDeployScopes) {
+        $script:TagScopeSelector.Items.Add($s.DisplayName) | Out-Null
+    }
+    if ($script:tagDeployScopes.Count -gt 0) {
+        $script:TagScopeSelector.SelectedIndex = 0
+    }
+}
+
+function Populate-MissingTagButtons {
+    $script:MissingTagButtons.Children.Clear()
+    if (-not $script:scanData.TagRecs) { return }
+
+    $missing = $script:scanData.TagRecs.Analysis | Where-Object { $_.Status -eq 'Missing' }
+    if ($missing.Count -eq 0) {
+        $noMissing = [System.Windows.Controls.TextBlock]::new()
+        $noMissing.Text = 'All recommended tags are present.'
+        $noMissing.FontSize = 12
+        $noMissing.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+        $script:MissingTagButtons.Children.Add($noMissing) | Out-Null
+        return
+    }
+
+    foreach ($tag in $missing) {
+        $btn = [System.Windows.Controls.Button]::new()
+        $btn.Content = "+ $($tag.TagName)"
+        $btn.FontSize = 12
+        $btn.Padding = [System.Windows.Thickness]::new(12, 6, 12, 6)
+        $btn.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
+        $btn.Cursor = [System.Windows.Input.Cursors]::Hand
+        $btn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FFF3E0')
+        $btn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        $btn.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        $btn.BorderThickness = [System.Windows.Thickness]::new(1)
+        $tagName = $tag.TagName
+        $btn.Add_Click({ Show-TagDeployPanel -TagName $tagName }.GetNewClosure())
+        $script:MissingTagButtons.Children.Add($btn) | Out-Null
+    }
+}
+
+#-----------------------------------------------------------------------
+# BILLING TAB POPULATION
+#-----------------------------------------------------------------------
+function Populate-BillingTab {
+    $d = $script:scanData.Billing
+
+    if (-not $d -or -not $d.HasBillingAccess) {
+        $script:BillingAccessNote.Text = "[!] No billing account access. Assign Billing Reader on your billing account to see billing profiles, invoice sections, and cost allocation rules."
+        return
+    }
+    $script:BillingAccessNote.Text = ''
+
+    # Billing Accounts
+    if ($d.BillingAccounts.Count -gt 0) {
+        $baRows = $d.BillingAccounts | ForEach-Object {
+            [PSCustomObject]@{
+                'Account Name'   = $_.DisplayName
+                'Agreement Type' = $_.AgreementType
+                'Account Type'   = $_.AccountType
+                'Status'         = $_.AccountStatus
+            }
+        }
+        $script:BillingAccountsGrid.ItemsSource = @($baRows)
+    } else {
+        $script:BillingAccountsGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No billing accounts found.' })
+    }
+
+    # Billing Profiles
+    if ($d.BillingProfiles.Count -gt 0) {
+        $bpRows = $d.BillingProfiles | ForEach-Object {
+            [PSCustomObject]@{
+                'Profile Name'    = $_.DisplayName
+                'Billing Account' = $_.BillingAccount
+                'Currency'        = $_.Currency
+                'Invoice Day'     = $_.InvoiceDay
+                'Status'          = $_.Status
+            }
+        }
+        $script:BillingProfilesGrid.ItemsSource = @($bpRows)
+    } else {
+        $script:BillingProfilesGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No billing profiles found (MCA/MPA only).' })
+    }
+
+    # Invoice Sections
+    if ($d.InvoiceSections.Count -gt 0) {
+        $isRows = $d.InvoiceSections | ForEach-Object {
+            [PSCustomObject]@{
+                'Section Name'    = $_.DisplayName
+                'Billing Profile' = $_.BillingProfile
+                'Billing Account' = $_.BillingAccount
+                'State'           = $_.State
+            }
+        }
+        $script:InvoiceSectionsGrid.ItemsSource = @($isRows)
+    } else {
+        $script:InvoiceSectionsGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No invoice sections found (MCA only).' })
+    }
+
+    # EA Departments
+    if ($d.EADepartments.Count -gt 0) {
+        $script:EADeptHeader.Visibility = 'Visible'
+        $script:EADeptGrid.Visibility = 'Visible'
+        $eaRows = $d.EADepartments | ForEach-Object {
+            [PSCustomObject]@{
+                'Department'      = $_.DisplayName
+                'Billing Account' = $_.BillingAccount
+                'Cost Center'     = $_.CostCenter
+                'Status'          = $_.Status
+            }
+        }
+        $script:EADeptGrid.ItemsSource = @($eaRows)
+    }
+
+    # Cost Allocation Rules
+    if ($d.CostAllocationRules.Count -gt 0) {
+        $carRows = $d.CostAllocationRules | ForEach-Object {
+            [PSCustomObject]@{
+                'Rule Name'       = $_.RuleName
+                'Description'     = $_.Description
+                'Status'          = $_.Status
+                'Source Count'    = $_.SourceCount
+                'Target Count'    = $_.TargetCount
+                'Created'         = $_.CreatedDate
+                'Updated'         = $_.UpdatedDate
+            }
+        }
+        $script:CostAllocationGrid.ItemsSource = @($carRows)
+    } else {
+        $script:CostAllocationGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No cost allocation rules configured. Cost allocation rules let you redistribute shared costs across subscriptions.' })
+    }
+}
+
 # -- Export Function ----------------------------------------------------
 function Export-ScanReport {
     $d = $script:scanData
@@ -773,29 +1026,39 @@ $script:scanStages = @(
     @{ Label = 'Scanning tag inventory...';            Pct = 50;  Action = {
         $script:scanData.Tags = Get-TagInventory -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Querying cost by tag...';              Pct = 60;  Action = {
+    @{ Label = 'Querying cost by tag...';              Pct = 55;  Action = {
         $tagNames = if ($script:scanData.Tags) { $script:scanData.Tags.TagNames } else { @{} }
         $script:scanData.CostByTag = Get-CostByTag -TenantId $script:scanData.Auth.TenantId -ExistingTags $tagNames -Subscriptions $script:scanData.Auth.Subscriptions
+    }}
+    @{ Label = 'Querying 6-month cost trend...';       Pct = 60;  Action = {
+        $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
     }}
     @{ Label = 'Scanning AHB opportunities...';        Pct = 70;  Action = {
         $script:scanData.AHB = Get-AHBOpportunities -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Loading reservation advice...';        Pct = 80;  Action = {
+    @{ Label = 'Loading reservation advice...';        Pct = 76;  Action = {
         $script:scanData.Reservations = Get-ReservationAdvice -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Loading optimization advice...';       Pct = 88;  Action = {
+    @{ Label = 'Loading optimization advice...';       Pct = 82;  Action = {
         $script:scanData.Optimization = Get-OptimizationAdvice -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Analyzing tag compliance...';          Pct = 95;  Action = {
+    @{ Label = 'Analyzing tag compliance...';          Pct = 86;  Action = {
         $tagNames = if ($script:scanData.Tags) { $script:scanData.Tags.TagNames } else { @{} }
         $script:scanData.TagRecs = Get-TagRecommendations -ExistingTags $tagNames
     }}
-    @{ Label = 'Building dashboard...';                Pct = 98;  Action = {
+    @{ Label = 'Querying billing structure...';        Pct = 90;  Action = {
+        $script:scanData.Billing = Get-BillingStructure
+    }}
+    @{ Label = 'Building dashboard...';                Pct = 96;  Action = {
         try { Populate-OverviewTab }      catch { Write-Warning "Populate-OverviewTab failed: $($_.Exception.Message)" }
         try { Populate-CostTab }           catch { Write-Warning "Populate-CostTab failed: $($_.Exception.Message)" }
+        try { Populate-TrendChart }        catch { Write-Warning "Populate-TrendChart failed: $($_.Exception.Message)" }
         try { Populate-TagsTab }           catch { Write-Warning "Populate-TagsTab failed: $($_.Exception.Message)" }
+        try { Populate-MissingTagButtons } catch { Write-Warning "Populate-MissingTagButtons failed: $($_.Exception.Message)" }
         try { Populate-OptimizationTab }   catch { Write-Warning "Populate-OptimizationTab failed: $($_.Exception.Message)" }
+        try { Populate-BillingTab }        catch { Write-Warning "Populate-BillingTab failed: $($_.Exception.Message)" }
         try { Populate-GuidanceTab }       catch { Write-Warning "Populate-GuidanceTab failed: $($_.Exception.Message)" }
+        $script:tagDeployScopesLoaded = $false   # Reset so scopes reload on next tag deploy
     }}
     @{ Label = 'Scan complete!';                       Pct = 100; Action = {
         $script:ExportButton.IsEnabled = $true
@@ -911,6 +1174,48 @@ $script:TagSelector.Add_SelectionChanged({
         $script:CostByTagGrid.ItemsSource = @()
         $script:NoTagsLabel.Text = "[!] No cost data returned for tag '$selectedTag'. The tag exists on resources but the Cost Management API did not return cost allocations. This can happen if the tagged resources have zero spend this month or if cost data is still processing."
     }
+})
+
+# Tag Deploy Button
+$script:TagDeployButton.Add_Click({
+    $tagName = $script:tagDeployCurrentTag
+    $tagValue = $script:TagValueInput.Text.Trim()
+    $selectedIdx = $script:TagScopeSelector.SelectedIndex
+
+    if (-not $tagName) {
+        $script:TagDeployStatus.Text = 'No tag selected.'
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($tagValue)) {
+        $script:TagDeployStatus.Text = 'Please enter a tag value.'
+        return
+    }
+    if ($selectedIdx -lt 0 -or $selectedIdx -ge $script:tagDeployScopes.Count) {
+        $script:TagDeployStatus.Text = 'Please select a scope.'
+        return
+    }
+
+    $scope = $script:tagDeployScopes[$selectedIdx].Scope
+    $script:TagDeployStatus.Text = 'Deploying...'
+    $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
+    )
+
+    $result = Deploy-ResourceTag -Scope $scope -TagName $tagName -TagValue $tagValue
+    if ($result.Success) {
+        $script:TagDeployStatus.Text = "Deployed: $tagName=$tagValue"
+        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+    } else {
+        $script:TagDeployStatus.Text = "Failed: $($result.Message)"
+        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+    }
+})
+
+# Tag Deploy Cancel Button
+$script:TagDeployCancelButton.Add_Click({
+    $script:TagDeployPanel.Visibility = 'Collapsed'
+    $script:tagDeployCurrentTag = $null
 })
 
 # Tree Selection

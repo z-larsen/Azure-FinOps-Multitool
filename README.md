@@ -36,14 +36,18 @@ pillars: **Understand**, **Quantify**, and **Optimize**.
 |---------------------|-----------------------------------|-----------------------------------------------------------|
 | **Hierarchy**       | Management Groups API             | Full MG tree with subscriptions, costs inline              |
 | **Costs**           | Cost Management API (MG scope)    | Actual month-to-date + forecast per subscription           |
+| **Cost Trend**      | Cost Management API (6 months)    | Bar chart showing monthly spend over the last 6 months     |
 | **Resource Costs**  | Cost Management API (per sub)     | Per-resource spend with type, RG, forecast, % of total     |
 | **Contract**        | Billing Accounts API + ARM quotaId | EA, MCA, PAYGO, or CSP detection (quotaId fallback)        |
 | **Tags**            | Azure Resource Graph              | Every tag name/value in use, untagged resource count        |
 | **Cost by Tag**     | Cost Management API               | Spend broken down by CostCenter, Environment, etc. (auto-fallback to last month) |
+| **Tag Deploy**      | ARM Tags API (PATCH merge)        | Click missing tags to deploy them to subscriptions or RGs  |
 | **AHB**             | Azure Resource Graph              | Windows VMs, SQL VMs, and SQL DBs missing Hybrid Benefit   |
 | **RI / SP**         | Advisor + Reservation Recs API    | RI and SP recs with Actual (MTD), Forecast, and savings    |
 | **Advisor**         | Azure Advisor (Cost category)     | Rightsize, shutdown, delete, modernize recs with cost data |
 | **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against Microsoft's recommended tag strategy   |
+| **Billing**         | Billing Accounts/Profiles API     | Billing accounts, profiles, invoice sections, EA depts     |
+| **Cost Allocation** | Cost Management Allocation API    | Existing cost allocation rules with source/target counts   |
 | **FinOps Guidance** | All of the above                  | Pillar-by-pillar maturity assessment with actionable advice |
 
 ---
@@ -89,9 +93,10 @@ cd AzureFinOpsMultitool
    stages with a progress bar
 5. When done, browse the tabs:
    - **Overview** — cost summary cards, subscription cost table, top resources by spend
-   - **Cost Analysis** — pick a tag from the dropdown to see spend by tag value (falls back to last month if current month is empty)
-   - **Tags** — tag inventory with unique values, coverage %, CAF compliance check
-   - **Optimization** — AHB gaps, RI recs, SP recs, Advisor recs — each with Actual (MTD), Forecast, savings estimate, and annual projection
+   - **Cost Analysis** -- 6-month cost trend bar chart + pick a tag from the dropdown to see spend by tag value (falls back to last month if current month is empty)
+   - **Tags** -- tag inventory with unique values, coverage %, CAF compliance check, clickable missing tag buttons to deploy tags directly to subscriptions/RGs
+   - **Optimization** -- AHB gaps, RI recs, SP recs, Advisor recs -- each with Actual (MTD), Forecast, savings estimate, and annual projection
+   - **Billing** -- billing accounts, billing profiles (MCA), invoice sections, EA departments, cost allocation rules
    - **FinOps Guidance** — pillar-by-pillar assessment with selectable/copyable references
 
 > The Choose Tenant button shows a lock icon: unlocked while choosing, locked once connected.
@@ -110,15 +115,18 @@ AzureFinOpsMultitool/
 │   ├── Get-TenantHierarchy.ps1          # Management group tree
 │   ├── Get-ContractInfo.ps1             # Billing account / contract type
 │   ├── Get-CostData.ps1                 # Actual + forecast costs (MG scope → per-sub fallback)
+│   ├── Get-CostTrend.ps1               # 6-month monthly cost trend data
 │   ├── Get-ResourceCosts.ps1            # Per-resource cost breakdown with pagination
 │   ├── Get-TagInventory.ps1             # Tag names, values, coverage
 │   ├── Get-CostByTag.ps1               # Cost breakdown by tag (MG → per-sub fallback)
+│   ├── Deploy-ResourceTag.ps1           # Deploy tags to subscriptions/RGs via ARM API
 │   ├── Get-AHBOpportunities.ps1         # Azure Hybrid Benefit gaps
-│   ├── Get-ReservationAdvice.ps1        # RI / Savings Plan recommendations (Resource Graph → REST fallback)
+│   ├── Get-ReservationAdvice.ps1        # RI / SP recs (Resource Graph → REST fallback)
 │   ├── Get-OptimizationAdvice.ps1       # Advisor cost optimizations (Resource Graph → REST fallback)
-│   └── Get-TagRecommendations.ps1       # CAF tag compliance check
+│   ├── Get-TagRecommendations.ps1       # CAF tag compliance check
+│   └── Get-BillingStructure.ps1         # Billing accounts, profiles, invoice sections, cost allocation
 ├── gui/
-│   └── MainWindow.xaml                  # WPF layout (Azure-themed, virtualized grids)
+│   └── MainWindow.xaml                  # WPF layout (Azure-themed, virtualized grids, trend chart)
 └── README.md
 ```
 
@@ -139,10 +147,12 @@ a `DispatcherTimer` so the UI updates between stages.
 | 5     | Get-ResourceCosts         | REST: Cost Management Query (per sub)     | ~10s  |
 | 6     | Get-TagInventory          | `Search-AzGraph` (cross-subscription)     | ~3s   |
 | 7     | Get-CostByTag             | REST: Cost Management Query + tag group   | ~5s   |
-| 8     | Get-AHBOpportunities      | `Search-AzGraph` (3 queries)              | ~3s   |
-| 9     | Get-ReservationAdvice     | `Search-AzGraph` (advisorresources) + Reservation Recs API | ~3s |
-| 10    | Get-OptimizationAdvice    | `Search-AzGraph` (advisorresources)       | ~3s   |
-| 11    | Get-TagRecommendations    | Local comparison (no API call)            | <1s   |
+| 8     | Get-CostTrend             | REST: Cost Management (Monthly, 6 months) | ~3s   |
+| 9     | Get-AHBOpportunities      | `Search-AzGraph` (3 queries)              | ~3s   |
+| 10    | Get-ReservationAdvice     | `Search-AzGraph` (advisorresources) + Reservation Recs API | ~3s |
+| 11    | Get-OptimizationAdvice    | `Search-AzGraph` (advisorresources)       | ~3s   |
+| 12    | Get-TagRecommendations    | Local comparison (no API call)            | <1s   |
+| 13    | Get-BillingStructure      | REST: Billing Accounts/Profiles/Sections  | ~3s   |
 
 > **Performance Note:** Cost queries try management-group scope first
 > (one call for all subs). If MG scope returns a non-200 status (e.g.
@@ -182,6 +192,10 @@ a `DispatcherTimer` so the UI updates between stages.
 | LoginExperienceV2 suppressed | `$env:AZURE_LOGIN_EXPERIENCE_V2=Off` prevents Az.Accounts 12+ console subscription picker |
 | Contract type quotaId fallback | Infers EA/MCA/PAYGO/Internal from ARM subscription quotaId when Billing API is inaccessible |
 | 4-column optimization grids | Each recommendation shows Actual (MTD), Forecast, With-X savings, and Annual Savings |
+| Pure WPF bar chart | Cost trend drawn with Canvas + Rectangles — no NuGet charting libraries needed |
+| Tag deployment via ARM Tags API | PATCH merge preserves existing tags; only adds/updates the target tag |
+| Lazy scope loading for tag deploy | Subscription/RG list fetched on first tag deploy click, cached for session |
+| Billing structure discovery | Queries billing accounts, profiles, invoice sections, EA departments, and cost allocation rules |
 
 ---
 
@@ -241,7 +255,7 @@ For very large tenants (100+ subscriptions), scan times are typically
 
 - [ ] C# / WPF conversion (full MVVM, async data loading)
 - [ ] Budget vs. actual comparison per subscription
-- [ ] Cost trend chart (last 6 months)
+- [x] ~~Cost trend chart (last 6 months)~~ — Implemented: WPF Canvas bar chart
 - [ ] Anomaly detection (spike alerts)
 - [ ] Azure Policy compliance overlay
 - [ ] PDF export with charts
