@@ -1970,47 +1970,424 @@ function Populate-Scorecard {
 function Export-ScanReport {
     $d = $script:scanData
     $dlg = [Microsoft.Win32.SaveFileDialog]::new()
-    $dlg.Filter = "CSV File (*.csv)|*.csv|HTML Report (*.html)|*.html"
-    $dlg.FileName = "FinOps-Scan-$(Get-Date -Format 'yyyy-MM-dd')"
+    $dlg.Filter = "HTML Report (*.html)|*.html|CSV File (*.csv)|*.csv"
+    $dlg.FileName = "FinOps-Report-$(Get-Date -Format 'yyyy-MM-dd')"
+    $dlg.FilterIndex = 1
 
-    if ($dlg.ShowDialog() -eq $true) {
-        $path = $dlg.FileName
+    if ($dlg.ShowDialog() -ne $true) { return }
+    $path = $dlg.FileName
 
-        if ($path -match '\.html$') {
-            # HTML report (all dynamic values HTML-encoded to prevent XSS)
-            $esc = [System.Security.SecurityElement]
-            $html = "<html><head><style>body{font-family:Segoe UI;margin:20px}table{border-collapse:collapse;width:100%;margin:10px 0}" +
-                "th{background:#0078D4;color:#fff;padding:8px;text-align:left}td{padding:6px 8px;border-bottom:1px solid #eee}" +
-                "h1{color:#0078D4}h2{color:#333;margin-top:30px}.card{display:inline-block;background:#fff;border:1px solid #ddd;" +
-                "border-radius:4px;padding:15px;margin:5px;min-width:180px}.card .label{color:#999;font-size:12px}.card .value{font-size:22px;font-weight:bold}</style></head><body>"
-            $html += "<h1>Azure FinOps Scan Report</h1><p>Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm') | Tenant: $($esc::Escape($d.Auth.TenantId))</p>"
-            $html += "<h2>Subscription Costs</h2><table><tr><th>Subscription</th><th>Actual (MTD)</th><th>Forecast</th></tr>"
-            foreach ($sub in $d.Auth.Subscriptions) {
-                $c = if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id] } else { @{ Actual = 0; Forecast = 0 } }
-                $html += "<tr><td>$($esc::Escape($sub.Name))</td><td>$($c.Actual.ToString('N2'))</td><td>$($c.Forecast.ToString('N2'))</td></tr>"
+    if ($path -match '\.csv$') {
+        # CSV - subscription costs
+        $rows = @()
+        foreach ($sub in $d.Auth.Subscriptions) {
+            $c = if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id] } else { @{ Actual = 0; Forecast = 0; Currency = 'USD' } }
+            $rows += [PSCustomObject]@{
+                Subscription = $sub.Name
+                SubscriptionId = $sub.Id
+                ActualMTD = $c.Actual
+                Forecast = $c.Forecast
+                Currency = $c.Currency
             }
-            $html += "</table>"
-            $html += "<h2>FinOps Guidance</h2><pre>$($esc::Escape($script:UnderstandText.Text))`n`n$($esc::Escape($script:QuantifyText.Text))`n`n$($esc::Escape($script:OptimizeText.Text))</pre>"
-            $html += "</body></html>"
-            [System.IO.File]::WriteAllText($path, $html, [System.Text.Encoding]::UTF8)
         }
-        else {
-            # CSV - subscription costs
-            $rows = @()
-            foreach ($sub in $d.Auth.Subscriptions) {
-                $c = if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id] } else { @{ Actual = 0; Forecast = 0; Currency = 'USD' } }
-                $rows += [PSCustomObject]@{
-                    Subscription = $sub.Name
-                    SubscriptionId = $sub.Id
-                    ActualMTD = $c.Actual
-                    Forecast = $c.Forecast
-                    Currency = $c.Currency
-                }
-            }
-            $rows | Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
-        }
-        Update-UIStatus "Report exported to $path" $script:ProgressBar.Value
+        $rows | Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
+        Update-UIStatus "CSV exported to $path" $script:ProgressBar.Value
+        return
     }
+
+    # ================================================================
+    # HTML REPORT - Professional FinOps Assessment
+    # ================================================================
+    $esc = [System.Security.SecurityElement]
+
+    # Currency helper
+    $sym = '$'
+    if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) {
+        $sym = Get-CurrencySymbol -Code $d.ResourceCosts[0].Currency
+    }
+
+    # Compute the maturity score (mirrors Populate-GuidanceTab logic)
+    $rptScore = 0; $rptBreakdown = @{}
+    # Visibility (25)
+    $vs = 0
+    if ($d.Tags) { $vs += [math]::Min([math]::Floor($d.Tags.TagCoverage / 10), 10) }
+    if ($d.Costs -and $d.Costs.Count -gt 0) { $vs += 5 }
+    if ($d.CostTrend -and $d.CostTrend.HasData) { $vs += 5 }
+    if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) { $vs += 5 }
+    $rptBreakdown['Visibility'] = [math]::Min($vs, 25); $rptScore += $rptBreakdown['Visibility']
+    # Allocation (20)
+    $as2 = 0
+    if ($d.TagRecs) { $as2 += [math]::Min([math]::Floor($d.TagRecs.CompliancePercent / 12.5), 8) }
+    if ($d.CostByTag -and -not $d.CostByTag.NoTagsFound -and $d.CostByTag.CostByTag.Count -gt 0) { $as2 += 4 }
+    if ($d.Tags -and $d.Tags.TagNames) {
+        $lcK = $d.Tags.TagNames.Keys | ForEach-Object { $_.ToLower() }
+        if ($lcK -contains 'costcenter' -or $lcK -contains 'businessunit' -or $lcK -contains 'department') { $as2 += 4 }
+    }
+    if ($d.Billing -and $d.Billing.CostAllocationRules -and $d.Billing.CostAllocationRules.Count -gt 0) { $as2 += 4 }
+    $rptBreakdown['Allocation'] = [math]::Min($as2, 20); $rptScore += $rptBreakdown['Allocation']
+    # Budgeting (15)
+    $bs2 = 0
+    if ($d.Budgets -and $d.Budgets.HasData) { $bs2 += 5 }
+    if ($d.Budgets) { $bs2 += [math]::Min([math]::Floor($d.Budgets.BudgetCoverage / 20), 5) }
+    if ($d.Budgets -and $d.Budgets.HasData) { if ($d.Budgets.OverBudgetCount -eq 0) { $bs2 += 5 } elseif ($d.Budgets.AtRiskCount -eq 0) { $bs2 += 3 } }
+    $rptBreakdown['Budgeting'] = [math]::Min($bs2, 15); $rptScore += $rptBreakdown['Budgeting']
+    # Optimization (20)
+    $os2 = 0
+    if ($d.Commitments -and $d.Commitments.HasData) { if ($d.Commitments.RIAvgUtilization -ge 80) { $os2 += 5 } elseif ($d.Commitments.RIAvgUtilization -ge 60) { $os2 += 3 } } else { $os2 += 2 }
+    if ($d.Savings -and $d.Savings.TotalMonthly -gt 0) { $os2 += 5 }
+    if ($d.Optimization) { if ($d.Optimization.TotalCount -eq 0) { $os2 += 5 } elseif ($d.Optimization.TotalCount -le 3) { $os2 += 3 } elseif ($d.Optimization.TotalCount -le 10) { $os2 += 1 } } else { $os2 += 2 }
+    if ($d.Orphans) { $oc = if ($d.Orphans.TotalCount) { $d.Orphans.TotalCount } else { 0 }; if ($oc -eq 0) { $os2 += 5 } elseif ($oc -le 5) { $os2 += 3 } elseif ($oc -le 15) { $os2 += 1 } } else { $os2 += 3 }
+    $rptBreakdown['Optimization'] = [math]::Min($os2, 20); $rptScore += $rptBreakdown['Optimization']
+    # Governance (20)
+    $gs2 = 0
+    if ($d.PolicyInv -and $d.PolicyInv.AssignmentCount -gt 0) { $gs2 += 5 }
+    if ($d.PolicyRecs) { $gs2 += [math]::Min([math]::Floor($d.PolicyRecs.CompliancePct / 20), 5) }
+    if ($d.PolicyInv -and $d.PolicyInv.CompliancePct -gt 80) { $gs2 += 5 } elseif ($d.PolicyInv -and $d.PolicyInv.CompliancePct -gt 50) { $gs2 += 3 }
+    if ($d.Hierarchy -and $d.Hierarchy.ManagementGroups -and $d.Hierarchy.ManagementGroups.Count -gt 1) { $gs2 += 5 } elseif ($d.Hierarchy -and $d.Hierarchy.ManagementGroups) { $gs2 += 2 }
+    $rptBreakdown['Governance'] = [math]::Min($gs2, 20); $rptScore += $rptBreakdown['Governance']
+    $rptScore = [math]::Min($rptScore, 100)
+
+    $gradeLabel = if ($rptScore -ge 85) { 'Excellent' } elseif ($rptScore -ge 70) { 'Good' } elseif ($rptScore -ge 50) { 'Developing' } elseif ($rptScore -ge 30) { 'Foundational' } else { 'Getting Started' }
+    $gradeColor = if ($rptScore -ge 85) { '#107C10' } elseif ($rptScore -ge 70) { '#0078D4' } elseif ($rptScore -ge 50) { '#7B2D8E' } elseif ($rptScore -ge 30) { '#D83B01' } else { '#E81123' }
+
+    # Total spend
+    $totalActual = 0.0; $totalForecast = 0.0
+    if ($d.Costs) { foreach ($k in $d.Costs.Keys) { $totalActual += $d.Costs[$k].Actual; $totalForecast += $d.Costs[$k].Forecast } }
+
+    # Build HTML
+    $sb = [System.Text.StringBuilder]::new(32768)
+    [void]$sb.Append(@"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Azure FinOps Assessment Report</title>
+<style>
+@media print { @page { margin: 0.5in; size: letter; } .no-print { display: none; } .page-break { page-break-before: always; } }
+* { box-sizing: border-box; }
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px 40px; color: #333; line-height: 1.5; background: #fff; }
+.header { background: linear-gradient(135deg, #0078D4, #005A9E); color: #fff; padding: 30px 40px; margin: -20px -40px 30px -40px; }
+.header h1 { margin: 0 0 8px 0; font-size: 28px; font-weight: 600; }
+.header p { margin: 0; opacity: 0.9; font-size: 13px; }
+.header .subtitle { font-size: 14px; margin-top: 4px; opacity: 0.85; }
+h2 { color: #0078D4; font-size: 20px; border-bottom: 2px solid #0078D4; padding-bottom: 6px; margin-top: 35px; }
+h3 { color: #333; font-size: 16px; margin-top: 20px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0 20px 0; font-size: 12px; }
+th { background: #0078D4; color: #fff; padding: 8px 10px; text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+td { padding: 7px 10px; border-bottom: 1px solid #e8e8e8; }
+tr:nth-child(even) { background: #f9f9f9; }
+tr:hover { background: #EBF5FF; }
+.cards { display: flex; flex-wrap: wrap; gap: 12px; margin: 15px 0; }
+.card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px 20px; min-width: 160px; flex: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.card .label { color: #777; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.card .value { font-size: 26px; font-weight: 700; margin: 4px 0; }
+.card .detail { font-size: 11px; color: #999; }
+.score-badge { display: inline-block; background: $gradeColor; color: #fff; padding: 8px 20px; border-radius: 6px; font-size: 28px; font-weight: 700; }
+.score-label { display: inline-block; font-size: 18px; color: $gradeColor; font-weight: 600; margin-left: 12px; vertical-align: middle; }
+.score-bar { height: 8px; border-radius: 4px; margin: 4px 0; }
+.score-bar-bg { background: #e8e8e8; }
+.score-bar-fill { background: $gradeColor; }
+.chip { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 11px; margin: 3px 4px; border: 1px solid #ddd; background: #f9f9f9; }
+.chip b { color: #0078D4; }
+.status-good { color: #107C10; font-weight: 600; }
+.status-warn { color: #D83B01; font-weight: 600; }
+.status-info { color: #0078D4; font-weight: 600; }
+.status-missing { color: #E81123; }
+.status-assigned { color: #107C10; }
+.text-right { text-align: right; }
+.text-muted { color: #999; font-size: 11px; }
+.bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 150px; margin: 15px 0; padding: 0 10px; }
+.bar-col { display: flex; flex-direction: column; align-items: center; flex: 1; }
+.bar { background: linear-gradient(180deg, #0078D4, #005A9E); border-radius: 3px 3px 0 0; min-width: 30px; width: 100%; }
+.bar-label { font-size: 10px; color: #666; margin-top: 4px; text-align: center; }
+.bar-value { font-size: 10px; color: #333; font-weight: 600; margin-bottom: 2px; }
+footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-size: 11px; color: #999; text-align: center; }
+.toc { background: #f5f8fc; padding: 20px; border-radius: 6px; margin: 15px 0; }
+.toc a { color: #0078D4; text-decoration: none; font-size: 13px; display: block; padding: 3px 0; }
+.toc a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="header">
+<h1>Azure FinOps Assessment Report</h1>
+<p class="subtitle">Tenant: $($esc::Escape($d.Auth.TenantId)) &nbsp;|&nbsp; $($esc::Escape($d.Auth.AccountName))</p>
+<p>Generated: $(Get-Date -Format 'MMMM d, yyyy h:mm tt') &nbsp;|&nbsp; Subscriptions scanned: $($d.Auth.Subscriptions.Count)</p>
+</div>
+
+<div class="toc">
+<strong>Contents</strong>
+<a href="#executive-summary">1. Executive Summary</a>
+<a href="#maturity-score">2. FinOps Maturity Score</a>
+<a href="#cost-overview">3. Cost Overview</a>
+<a href="#cost-trend">4. 6-Month Cost Trend</a>
+<a href="#resource-costs">5. Top Resource Costs</a>
+<a href="#tagging">6. Tag Compliance</a>
+<a href="#policy">7. Policy Compliance</a>
+<a href="#optimization">8. Optimization Opportunities</a>
+<a href="#budgets">9. Budget Status</a>
+</div>
+"@)
+
+    # == 1. EXECUTIVE SUMMARY ==
+    [void]$sb.Append(@"
+<h2 id="executive-summary">1. Executive Summary</h2>
+<div class="cards">
+<div class="card"><div class="label">Total Spend (MTD)</div><div class="value" style="color:#0078D4">$sym$($totalActual.ToString('N2'))</div><div class="detail">Forecast: $sym$($totalForecast.ToString('N2'))</div></div>
+<div class="card"><div class="label">FinOps Maturity</div><div class="value" style="color:$gradeColor">$rptScore / 100</div><div class="detail">$gradeLabel</div></div>
+<div class="card"><div class="label">Subscriptions</div><div class="value" style="color:#0078D4">$($d.Auth.Subscriptions.Count)</div><div class="detail">Scanned</div></div>
+"@)
+    if ($d.Tags) {
+        [void]$sb.Append("<div class=`"card`"><div class=`"label`">Tag Coverage</div><div class=`"value`" style=`"color:$(if ($d.Tags.TagCoverage -ge 80) { '#107C10' } elseif ($d.Tags.TagCoverage -ge 50) { '#D83B01' } else { '#E81123' })`">$([math]::Round($d.Tags.TagCoverage,1))%</div><div class=`"detail`">$($d.Tags.TaggedCount) of $($d.Tags.TotalResources) resources</div></div>")
+    }
+    if ($d.PolicyInv) {
+        [void]$sb.Append("<div class=`"card`"><div class=`"label`">Policy Compliance</div><div class=`"value`" style=`"color:$(if ($d.PolicyInv.CompliancePct -ge 80) { '#107C10' } elseif ($d.PolicyInv.CompliancePct -ge 50) { '#D83B01' } else { '#E81123' })`">$([math]::Round($d.PolicyInv.CompliancePct,1))%</div><div class=`"detail`">$($d.PolicyInv.TotalNonCompliant) non-compliant</div></div>")
+    }
+    $optTotal = 0
+    if ($d.Orphans) { $optTotal += $d.Orphans.TotalCount }
+    if ($d.AHB) { $optTotal += $d.AHB.TotalOpportunities }
+    if ($d.Optimization) { $optTotal += $d.Optimization.TotalCount }
+    [void]$sb.Append("<div class=`"card`"><div class=`"label`">Optimizations Found</div><div class=`"value`" style=`"color:#D83B01`">$optTotal</div><div class=`"detail`">AHB + Orphans + Advisor</div></div>")
+    [void]$sb.Append("</div>")
+
+    # == 2. MATURITY SCORE ==
+    [void]$sb.Append(@"
+<h2 id="maturity-score">2. FinOps Maturity Score</h2>
+<div style="margin:15px 0;">
+<span class="score-badge">$rptScore</span>
+<span class="score-label">$gradeLabel</span>
+</div>
+<p class="text-muted">Score based on FinOps Foundation Maturity Model and Microsoft Cloud Adoption Framework. Categories: Visibility (25), Allocation (20), Budgeting (15), Optimization (20), Governance (20).</p>
+<div style="margin:15px 0;">
+"@)
+    foreach ($cat in @('Visibility','Allocation','Budgeting','Optimization','Governance')) {
+        $catMax = switch ($cat) { 'Visibility' { 25 } 'Allocation' { 20 } 'Budgeting' { 15 } default { 20 } }
+        $catVal = if ($rptBreakdown.ContainsKey($cat)) { $rptBreakdown[$cat] } else { 0 }
+        $pct = if ($catMax -gt 0) { [math]::Round(($catVal / $catMax) * 100) } else { 0 }
+        [void]$sb.Append("<div style=`"margin:8px 0;`"><strong>$cat</strong> <span style=`"color:#0078D4;`">$catVal / $catMax</span><div class=`"score-bar score-bar-bg`"><div class=`"score-bar score-bar-fill`" style=`"width:${pct}%;`"></div></div></div>")
+    }
+    [void]$sb.Append("</div>")
+
+    # == 3. COST OVERVIEW ==
+    [void]$sb.Append(@"
+<h2 id="cost-overview">3. Cost Overview by Subscription</h2>
+<table>
+<tr><th>Subscription</th><th>Subscription ID</th><th class="text-right">Actual (MTD)</th><th class="text-right">Forecast</th><th class="text-right">Tag Coverage</th><th>Budget Status</th><th>Cost Trend</th></tr>
+"@)
+    foreach ($sub in $d.Auth.Subscriptions | Sort-Object { if ($d.Costs -and $d.Costs.ContainsKey($_.Id)) { $d.Costs[$_.Id].Actual } else { 0 } } -Descending) {
+        $c = if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id] } else { @{ Actual = 0; Forecast = 0 } }
+
+        # Tag coverage per sub
+        $tagPct = '-'
+        if ($d.Tags -and $d.Tags.RawResults) {
+            $subRes = @($d.Tags.RawResults | Where-Object { $_.subscriptionId -eq $sub.Id })
+            if ($subRes.Count -gt 0) {
+                $tagged = @($subRes | Where-Object { $_.tags -and $_.tags.PSObject.Properties.Count -gt 0 }).Count
+                $tagPct = "$([math]::Round(($tagged / $subRes.Count) * 100, 1))%"
+            }
+        }
+
+        # Budget status
+        $budgetTxt = '-'
+        if ($d.Budgets -and $d.Budgets.Budgets) {
+            $subBudgets = @($d.Budgets.Budgets | Where-Object { $_.SubscriptionId -eq $sub.Id })
+            if ($subBudgets.Count -gt 0) {
+                $worstRisk = ($subBudgets | Sort-Object PctUsed -Descending | Select-Object -First 1).Risk
+                $budgetTxt = $worstRisk
+            } else { $budgetTxt = 'No Budget' }
+        }
+        $budgetClass = switch ($budgetTxt) { 'Over Budget' { 'status-warn' } 'At Risk' { 'status-warn' } 'On Track' { 'status-good' } default { 'text-muted' } }
+
+        # Cost trend
+        $trendTxt = '-'
+        if ($d.CostTrend -and $d.CostTrend.HasData -and $d.CostTrend.Months.Count -ge 2) {
+            $last = $d.CostTrend.Months[-1].Cost; $prev = $d.CostTrend.Months[-2].Cost
+            if ($prev -gt 0) {
+                $pctChg = [math]::Round((($last - $prev) / $prev) * 100, 1)
+                $trendTxt = if ($pctChg -gt 5) { "Up $pctChg%" } elseif ($pctChg -lt -5) { "Down $([math]::Abs($pctChg))%" } else { 'Stable' }
+            }
+        }
+
+        [void]$sb.Append("<tr><td><strong>$($esc::Escape($sub.Name))</strong></td><td class=`"text-muted`">$($sub.Id)</td>")
+        [void]$sb.Append("<td class=`"text-right`">$sym$($c.Actual.ToString('N2'))</td><td class=`"text-right`">$sym$($c.Forecast.ToString('N2'))</td>")
+        [void]$sb.Append("<td class=`"text-right`">$tagPct</td><td class=`"$budgetClass`">$budgetTxt</td><td>$trendTxt</td></tr>")
+    }
+    [void]$sb.Append("<tr style=`"font-weight:700;background:#EBF5FF;`"><td>Total</td><td></td><td class=`"text-right`">$sym$($totalActual.ToString('N2'))</td><td class=`"text-right`">$sym$($totalForecast.ToString('N2'))</td><td></td><td></td><td></td></tr>")
+    [void]$sb.Append("</table>")
+
+    # == 4. COST TREND ==
+    [void]$sb.Append('<h2 id="cost-trend">4. 6-Month Cost Trend</h2>')
+    if ($d.CostTrend -and $d.CostTrend.HasData -and $d.CostTrend.Months.Count -gt 0) {
+        $months = $d.CostTrend.Months
+        $maxCost = ($months | Measure-Object -Property Cost -Maximum).Maximum
+        if ($maxCost -le 0) { $maxCost = 1 }
+        [void]$sb.Append("<table><tr><th>Month</th><th class=`"text-right`">Spend</th><th>Bar</th></tr>")
+        foreach ($m in $months) {
+            $barW = [math]::Round(($m.Cost / $maxCost) * 100)
+            [void]$sb.Append("<tr><td>$($esc::Escape($m.Month))</td><td class=`"text-right`">$sym$($m.Cost.ToString('N2'))</td>")
+            [void]$sb.Append("<td><div style=`"background:linear-gradient(90deg,#0078D4,#005A9E);height:18px;width:${barW}%;border-radius:3px;min-width:2px;`"></div></td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    } else {
+        [void]$sb.Append('<p class="text-muted">No cost trend data available.</p>')
+    }
+
+    # == 5. RESOURCE COSTS ==
+    [void]$sb.Append('<div class="page-break"></div><h2 id="resource-costs">5. Top Resource Costs</h2>')
+    if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) {
+        $topResources = $d.ResourceCosts | Sort-Object Actual -Descending | Select-Object -First 50
+        [void]$sb.Append("<p class=`"text-muted`">Showing top $([math]::Min(50, $d.ResourceCosts.Count)) of $($d.ResourceCosts.Count) resources by MTD cost.</p>")
+        [void]$sb.Append("<table><tr><th>Resource</th><th>Type</th><th>Resource Group</th><th>Subscription</th><th class=`"text-right`">Actual (MTD)</th><th class=`"text-right`">Forecast</th></tr>")
+        foreach ($r in $topResources) {
+            $resName = ($r.ResourcePath -split '/')[-1]
+            [void]$sb.Append("<tr><td><strong>$($esc::Escape($resName))</strong></td><td>$($esc::Escape($r.ResourceType))</td>")
+            [void]$sb.Append("<td>$($esc::Escape($r.ResourceGroup))</td><td>$($esc::Escape($r.Subscription))</td>")
+            [void]$sb.Append("<td class=`"text-right`">$sym$($r.Actual.ToString('N2'))</td><td class=`"text-right`">$sym$($r.Forecast.ToString('N2'))</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    } else {
+        [void]$sb.Append('<p class="text-muted">No resource-level cost data available.</p>')
+    }
+
+    # == 6. TAG COMPLIANCE ==
+    [void]$sb.Append('<h2 id="tagging">6. Tag Compliance</h2>')
+    if ($d.Tags) {
+        [void]$sb.Append(@"
+<div class="cards">
+<div class="card"><div class="label">Tag Coverage</div><div class="value" style="color:#0078D4">$([math]::Round($d.Tags.TagCoverage,1))%</div><div class="detail">$($d.Tags.TaggedCount) tagged / $($d.Tags.TotalResources) total</div></div>
+<div class="card"><div class="label">Unique Tags</div><div class="value" style="color:#0078D4">$($d.Tags.TagCount)</div><div class="detail">Distinct tag names</div></div>
+<div class="card"><div class="label">Untagged Resources</div><div class="value" style="color:#D83B01">$($d.Tags.UntaggedCount)</div></div>
+</div>
+"@)
+        # CAF recommended tags
+        if ($d.TagRecs) {
+            [void]$sb.Append("<h3>Microsoft CAF Recommended Tags</h3>")
+            [void]$sb.Append("<table><tr><th>Tag Name</th><th>Status</th><th>Purpose</th></tr>")
+            foreach ($tr in $d.TagRecs.Analysis) {
+                $statusCls = if ($tr.Status -eq 'Present') { 'status-assigned' } else { 'status-missing' }
+                [void]$sb.Append("<tr><td><strong>$($esc::Escape($tr.TagName))</strong></td><td class=`"$statusCls`">$($tr.Status)</td><td>$($esc::Escape($tr.Purpose))</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+    } else {
+        [void]$sb.Append('<p class="text-muted">No tag data available.</p>')
+    }
+
+    # == 7. POLICY COMPLIANCE ==
+    [void]$sb.Append('<div class="page-break"></div><h2 id="policy">7. Policy Compliance</h2>')
+    if ($d.PolicyInv) {
+        [void]$sb.Append(@"
+<div class="cards">
+<div class="card"><div class="label">Policy Assignments</div><div class="value" style="color:#0078D4">$($d.PolicyInv.AssignmentCount)</div></div>
+<div class="card"><div class="label">Compliance</div><div class="value" style="color:$(if ($d.PolicyInv.CompliancePct -ge 80) { '#107C10' } else { '#D83B01' })">$([math]::Round($d.PolicyInv.CompliancePct,1))%</div></div>
+<div class="card"><div class="label">Non-Compliant Resources</div><div class="value" style="color:#D83B01">$($d.PolicyInv.TotalNonCompliant)</div></div>
+</div>
+"@)
+        # Per-subscription compliance
+        if ($d.PolicyInv.ComplianceBySubMap -and $d.PolicyInv.ComplianceBySubMap.Count -gt 0) {
+            [void]$sb.Append("<h3>Per-Subscription Compliance</h3><table><tr><th>Subscription</th><th class=`"text-right`">Compliant</th><th class=`"text-right`">Non-Compliant</th><th class=`"text-right`">Total</th><th class=`"text-right`">Compliance %</th></tr>")
+            foreach ($sk in $d.PolicyInv.ComplianceBySubMap.Keys) {
+                $cs = $d.PolicyInv.ComplianceBySubMap[$sk]
+                $cpct = if (($cs.Compliant + $cs.NonCompliant) -gt 0) { [math]::Round(($cs.Compliant / ($cs.Compliant + $cs.NonCompliant)) * 100, 1) } else { 0 }
+                [void]$sb.Append("<tr><td>$($esc::Escape($cs.Subscription))</td><td class=`"text-right`">$($cs.Compliant)</td><td class=`"text-right`">$($cs.NonCompliant)</td><td class=`"text-right`">$($cs.TotalResources)</td><td class=`"text-right`">$cpct%</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+    }
+
+    # FinOps Policy Recommendations
+    if ($d.PolicyRecs) {
+        [void]$sb.Append("<h3>FinOps Recommended Policies ($($d.PolicyRecs.Assigned.Count) of $($d.PolicyRecs.Analysis.Count) assigned)</h3>")
+        [void]$sb.Append("<table><tr><th>Policy</th><th>Status</th><th>Category</th><th>Priority</th><th>Pillar</th><th>Purpose</th></tr>")
+        foreach ($pr in $d.PolicyRecs.Analysis | Sort-Object { switch ($_.Priority) { 'Required' { 0 } 'Recommended' { 1 } 'Optional' { 2 } default { 3 } } }) {
+            $sCls = if ($pr.Status -eq 'Assigned') { 'status-assigned' } else { 'status-missing' }
+            [void]$sb.Append("<tr><td><strong>$($esc::Escape($pr.DisplayName))</strong></td><td class=`"$sCls`">$($pr.Status)</td>")
+            [void]$sb.Append("<td>$($esc::Escape($pr.Category))</td><td>$($pr.Priority)</td><td>$($pr.Pillar)</td><td>$($esc::Escape($pr.Purpose))</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    }
+
+    # == 8. OPTIMIZATION ==
+    [void]$sb.Append('<h2 id="optimization">8. Optimization Opportunities</h2>')
+    # AHB
+    if ($d.AHB -and $d.AHB.TotalOpportunities -gt 0) {
+        [void]$sb.Append("<h3>Azure Hybrid Benefit Opportunities ($($d.AHB.TotalOpportunities))</h3>")
+        [void]$sb.Append("<p>$($esc::Escape($d.AHB.Summary))</p>")
+        if ($d.AHB.WindowsVMs.Count -gt 0) {
+            [void]$sb.Append("<table><tr><th>VM Name</th><th>Resource Group</th><th>Size</th><th>Location</th><th>Current License</th></tr>")
+            foreach ($vm in $d.AHB.WindowsVMs) {
+                [void]$sb.Append("<tr><td>$($esc::Escape($vm.name))</td><td>$($esc::Escape($vm.resourceGroup))</td><td>$($esc::Escape($vm.vmSize))</td><td>$($esc::Escape($vm.location))</td><td>$($esc::Escape($vm.currentLicense))</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+    }
+    # Orphans
+    if ($d.Orphans -and $d.Orphans.TotalCount -gt 0) {
+        [void]$sb.Append("<h3>Orphaned / Idle Resources ($($d.Orphans.TotalCount))</h3>")
+        [void]$sb.Append("<table><tr><th>Category</th><th>Resource</th><th>Resource Group</th><th>Impact</th><th>Detail</th></tr>")
+        foreach ($o in $d.Orphans.Orphans | Sort-Object Impact -Descending) {
+            $impCls = switch ($o.Impact) { 'High' { 'status-warn' } 'Medium' { 'status-info' } default { 'text-muted' } }
+            [void]$sb.Append("<tr><td>$($esc::Escape($o.Category))</td><td><strong>$($esc::Escape($o.ResourceName))</strong></td><td>$($esc::Escape($o.ResourceGroup))</td><td class=`"$impCls`">$($o.Impact)</td><td>$($esc::Escape($o.Detail))</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    }
+    # Advisor
+    if ($d.Optimization -and $d.Optimization.TotalCount -gt 0) {
+        [void]$sb.Append("<h3>Azure Advisor Cost Recommendations ($($d.Optimization.TotalCount))</h3>")
+        if ($d.Optimization.EstimatedAnnualSavings -gt 0) {
+            [void]$sb.Append("<p>Estimated annual savings: <strong>$sym$($d.Optimization.EstimatedAnnualSavings.ToString('N2'))</strong></p>")
+        }
+        [void]$sb.Append("<table><tr><th>Subscription</th><th>Category</th><th>Impact</th><th>Problem</th><th>Solution</th><th class=`"text-right`">Annual Savings</th></tr>")
+        foreach ($rec in $d.Optimization.Recommendations | Sort-Object { switch ($_.Impact) { 'High' { 0 } 'Medium' { 1 } default { 2 } } }) {
+            $impCls = switch ($rec.Impact) { 'High' { 'status-warn' } 'Medium' { 'status-info' } default { 'text-muted' } }
+            $savings = if ($rec.AnnualSavings -and $rec.AnnualSavings -gt 0) { "$sym$($rec.AnnualSavings.ToString('N2'))" } else { '-' }
+            [void]$sb.Append("<tr><td>$($esc::Escape($rec.Subscription))</td><td>$($esc::Escape($rec.Category))</td><td class=`"$impCls`">$($rec.Impact)</td>")
+            [void]$sb.Append("<td>$($esc::Escape($rec.Problem))</td><td>$($esc::Escape($rec.Solution))</td><td class=`"text-right`">$savings</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    }
+    if ($optTotal -eq 0) {
+        [void]$sb.Append('<p class="status-good">No optimization issues found. Well optimized!</p>')
+    }
+
+    # == 9. BUDGETS ==
+    [void]$sb.Append('<div class="page-break"></div><h2 id="budgets">9. Budget Status</h2>')
+    if ($d.Budgets -and $d.Budgets.HasData) {
+        [void]$sb.Append(@"
+<div class="cards">
+<div class="card"><div class="label">Total Budgets</div><div class="value" style="color:#0078D4">$($d.Budgets.TotalBudgets)</div></div>
+<div class="card"><div class="label">Budget Coverage</div><div class="value" style="color:#0078D4">$([math]::Round($d.Budgets.BudgetCoverage,0))%</div><div class="detail">$($d.Budgets.SubsWithBudget) of $($d.Budgets.SubsWithBudget + $d.Budgets.SubsWithoutBudget) subscriptions</div></div>
+<div class="card"><div class="label">Over Budget</div><div class="value" style="color:$(if ($d.Budgets.OverBudgetCount -gt 0) { '#E81123' } else { '#107C10' })">$($d.Budgets.OverBudgetCount)</div></div>
+<div class="card"><div class="label">At Risk</div><div class="value" style="color:$(if ($d.Budgets.AtRiskCount -gt 0) { '#D83B01' } else { '#107C10' })">$($d.Budgets.AtRiskCount)</div></div>
+</div>
+"@)
+        [void]$sb.Append("<table><tr><th>Subscription</th><th>Budget Name</th><th class=`"text-right`">Amount</th><th class=`"text-right`">Actual Spend</th><th class=`"text-right`">% Used</th><th>Risk</th></tr>")
+        foreach ($b in $d.Budgets.Budgets | Sort-Object PctUsed -Descending) {
+            $riskCls = switch ($b.Risk) { 'Over Budget' { 'status-warn' } 'At Risk' { 'status-warn' } 'On Track' { 'status-good' } default { 'text-muted' } }
+            [void]$sb.Append("<tr><td>$($esc::Escape($b.Subscription))</td><td>$($esc::Escape($b.BudgetName))</td>")
+            [void]$sb.Append("<td class=`"text-right`">$sym$($b.Amount.ToString('N2'))</td><td class=`"text-right`">$sym$($b.ActualSpend.ToString('N2'))</td>")
+            [void]$sb.Append("<td class=`"text-right`">$([math]::Round($b.PctUsed,1))%</td><td class=`"$riskCls`">$($b.Risk)</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    } else {
+        [void]$sb.Append('<p class="text-muted">No budgets configured. Consider creating budgets for all production subscriptions.</p>')
+    }
+
+    # Footer
+    [void]$sb.Append(@"
+<footer>
+<p>Generated by <strong>Azure FinOps Multitool</strong> &mdash; $(Get-Date -Format 'MMMM d, yyyy h:mm tt')</p>
+<p>Based on FinOps Foundation Framework and Microsoft Cloud Adoption Framework for Azure.</p>
+<p class="no-print" style="margin-top:10px;"><em>Tip: Use your browser's Print function (Ctrl+P) and select "Save as PDF" for a PDF version of this report.</em></p>
+</footer>
+</body>
+</html>
+"@)
+
+    [System.IO.File]::WriteAllText($path, $sb.ToString(), [System.Text.Encoding]::UTF8)
+    Update-UIStatus "Report exported to $path" $script:ProgressBar.Value
+
+    # Auto-open the report
+    try { Start-Process $path } catch { }
 }
 
 ###########################################################################
