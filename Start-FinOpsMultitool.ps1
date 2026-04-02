@@ -38,6 +38,10 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Get-CostTrend.ps1')
 . (Join-Path $modulePath 'Deploy-ResourceTag.ps1')
 . (Join-Path $modulePath 'Get-BillingStructure.ps1')
+. (Join-Path $modulePath 'Get-CommitmentUtilization.ps1')
+. (Join-Path $modulePath 'Get-OrphanedResources.ps1')
+. (Join-Path $modulePath 'Get-BudgetStatus.ps1')
+. (Join-Path $modulePath 'Get-SavingsRealized.ps1')
 
 # -- Load XAML ----------------------------------------------------------
 $xamlPath = Join-Path $PSScriptRoot 'gui\MainWindow.xaml'
@@ -69,11 +73,17 @@ $controls = @(
     'MissingTagButtons', 'TagDeployPanel', 'TagDeployTitle',
     'TagScopeSelector', 'TagValueInput', 'TagDeployButton',
     'TagDeployCancelButton', 'TagDeployStatus',
+    # Overview - Budget & Scorecard
+    'SavingsRealizedText', 'SavingsRealizedDetail',
+    'BudgetSummaryText', 'BudgetGrid', 'ScorecardGrid',
+    # Cost Analysis - Anomalies
+    'AnomalyNote', 'AnomalyGrid',
     # Optimization
-    'AHBCountText', 'AHBDetailText', 'RICountText', 'RISavingsText',
-    'SPCountText', 'SPSavingsText', 'RIContractNote', 'SPContractNote',
+    'AHBCountText', 'AHBDetailText', 'OrphanCountText', 'OrphanDetailText',
+    'RIUtilText', 'RIUtilDetail', 'RIContractNote', 'SPContractNote',
     'AdvisorCountText', 'AdvisorSavingsText', 'AHBSummaryText',
     'AHBGrid', 'RIGrid', 'SPGrid', 'AdvisorGrid',
+    'CommitmentGrid', 'OrphanGrid', 'OrphanSummaryText',
     # Billing
     'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
@@ -101,6 +111,10 @@ $script:scanData = @{
     Optimization  = $null
     TagRecs       = $null
     Billing       = $null
+    Commitments   = $null
+    Orphans       = $null
+    Budgets       = $null
+    Savings       = $null
 }
 
 ###########################################################################
@@ -208,6 +222,17 @@ function Populate-OverviewTab {
     if ($d.Optimization) { $totalSavings += $d.Optimization.EstimatedAnnualSavings }
     if ($d.Reservations) { $totalSavings += $d.Reservations.EstimatedAnnualSavings }
     $script:TotalSavingsText.Text = "`$$($totalSavings.ToString('N2'))/yr"
+
+    # Savings Realized card
+    if ($d.Savings) {
+        $sym = Get-CurrencySymbol $currency
+        $script:SavingsRealizedText.Text = "$sym$($d.Savings.TotalMonthly.ToString('N2'))/mo"
+        $parts = @()
+        if ($d.Savings.RISavingsMonthly -gt 0) { $parts += "RI: $sym$($d.Savings.RISavingsMonthly.ToString('N0'))" }
+        if ($d.Savings.SPSavingsMonthly -gt 0) { $parts += "SP: $sym$($d.Savings.SPSavingsMonthly.ToString('N0'))" }
+        if ($d.Savings.AHBSavingsMonthly -gt 0) { $parts += "AHB: $sym$($d.Savings.AHBSavingsMonthly.ToString('N0'))" }
+        $script:SavingsRealizedDetail.Text = if ($parts.Count -gt 0) { $parts -join ' | ' } else { 'No existing commitment savings detected' }
+    }
 
     # Subscription cost grid
     $subRows = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -480,19 +505,6 @@ function Populate-OptimizationTab {
         }
         if ($script:RIContractNote) { $script:RIContractNote.Text = $contractNote }
         if ($script:SPContractNote) { $script:SPContractNote.Text = $contractNote }
-
-        # RI card
-        $riTotal = $riRecs.Count + $d.Reservations.TotalReservationCount
-        $riSavings = ($riRecs | Where-Object { $_.AnnualSavings } | Measure-Object -Property AnnualSavings -Sum).Sum
-        $rrSavings = ($d.Reservations.ReservationRecommendations | Where-Object { $_.NetSavings } | Measure-Object -Property NetSavings -Sum).Sum
-        $riTotalSavings = [math]::Round($riSavings + $rrSavings, 2)
-        $script:RICountText.Text = $riTotal.ToString()
-        $script:RISavingsText.Text = "Est. $currency$($riTotalSavings.ToString('N2'))/yr"
-
-        # SP card
-        $spSavings = ($spRecs | Where-Object { $_.AnnualSavings } | Measure-Object -Property AnnualSavings -Sum).Sum
-        $script:SPCountText.Text = $spRecs.Count.ToString()
-        $script:SPSavingsText.Text = "Est. $currency$([math]::Round($spSavings, 2).ToString('N2'))/yr"
 
         # RI grid - Advisor RI recs + Reservation API recs
         $riRows = @()
@@ -952,6 +964,267 @@ function Populate-BillingTab {
     }
 }
 
+#-----------------------------------------------------------------------
+# BUDGET STATUS POPULATION
+#-----------------------------------------------------------------------
+function Populate-BudgetSection {
+    $d = $script:scanData
+    if (-not $d.Budgets) {
+        $script:BudgetSummaryText.Text = 'Budget data not available.'
+        return
+    }
+
+    $b = $d.Budgets
+    $riskText = "$($b.SubsWithBudget) of $($b.SubsWithBudget + $b.SubsWithoutBudget) subscriptions have budgets ($($b.BudgetCoverage)% coverage)"
+    if ($b.SubsWithoutBudget -gt 0) {
+        $riskText += " | $($b.SubsWithoutBudget) subs have NO budget configured"
+    }
+    $script:BudgetSummaryText.Text = $riskText
+
+    if ($b.Budgets.Count -gt 0) {
+        $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($budget in $b.Budgets) {
+            [void]$rows.Add([PSCustomObject]@{
+                Subscription = $budget.Subscription
+                'Budget Name' = $budget.BudgetName
+                'Budget Amount' = $budget.BudgetAmount.ToString('N2')
+                'Actual Spend' = $budget.ActualSpend.ToString('N2')
+                '% Used' = "$($budget.PercentUsed)%"
+                'Forecast' = $budget.ForecastSpend.ToString('N2')
+                'Risk' = $budget.Risk
+                'Currency' = $budget.Currency
+            })
+        }
+        $script:BudgetGrid.ItemsSource = @($rows | Sort-Object { [double]($_.'% Used' -replace '%','') } -Descending)
+    } else {
+        $script:BudgetGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No budgets configured. Set up Azure Budgets to track spend against targets.' })
+    }
+}
+
+#-----------------------------------------------------------------------
+# COST ANOMALY DETECTION (month-over-month per subscription)
+#-----------------------------------------------------------------------
+function Populate-AnomalySection {
+    $d = $script:scanData
+    if (-not $d.CostTrend -or -not $d.CostTrend.HasData) {
+        $script:AnomalyNote.Text = 'Cost trend data not available for anomaly detection.'
+        return
+    }
+
+    # Build per-subscription month-over-month from cost data + trend
+    $anomalies = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $currency = if ($d.CostTrend.Months[0].Currency) { Get-CurrencySymbol -Code $d.CostTrend.Months[0].Currency } else { '$' }
+
+    if ($d.Costs) {
+        $months = $d.CostTrend.Months
+        $lastMonth = if ($months.Count -ge 2) { $months[$months.Count - 2] } else { $null }
+        $currentMonth = $months[$months.Count - 1]
+
+        foreach ($sub in $d.Auth.Subscriptions) {
+            $currentCost = if ($d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id].Forecast } else { 0 }
+            # Use the ratio of this sub's cost to total to estimate per-sub last month
+            $totalCurrent = 0
+            foreach ($entry in $d.Costs.GetEnumerator()) { $totalCurrent += $entry.Value.Forecast }
+            $subShare = if ($totalCurrent -gt 0) { $currentCost / $totalCurrent } else { 0 }
+
+            if ($lastMonth -and $lastMonth.Cost -gt 0) {
+                $estLastMonth = [math]::Round($lastMonth.Cost * $subShare, 2)
+                if ($estLastMonth -gt 50) {
+                    $change = $currentCost - $estLastMonth
+                    $changePct = [math]::Round(($change / $estLastMonth) * 100, 1)
+                    if ([math]::Abs($changePct) -ge 25) {
+                        $direction = if ($changePct -gt 0) { 'Up' } else { 'Down' }
+                        [void]$anomalies.Add([PSCustomObject]@{
+                            Subscription = $sub.Name
+                            'Prior Month (est.)' = "$currency$($estLastMonth.ToString('N2'))"
+                            'Current Forecast' = "$currency$($currentCost.ToString('N2'))"
+                            'Change' = "$currency$($change.ToString('N2'))"
+                            'Change %' = "$changePct%"
+                            Direction = $direction
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    if ($anomalies.Count -gt 0) {
+        $script:AnomalyNote.Text = "$($anomalies.Count) subscription(s) with 25%+ month-over-month cost change detected."
+        $script:AnomalyGrid.ItemsSource = @($anomalies | Sort-Object { [math]::Abs([double]($_.'Change %' -replace '%','')) } -Descending)
+    } else {
+        $script:AnomalyNote.Text = 'No significant cost anomalies detected (all subscriptions within 25% of prior month).'
+        $script:AnomalyGrid.ItemsSource = @()
+    }
+}
+
+#-----------------------------------------------------------------------
+# COMMITMENT UTILIZATION POPULATION
+#-----------------------------------------------------------------------
+function Populate-CommitmentSection {
+    $d = $script:scanData
+
+    # RI Util card
+    if ($d.Commitments) {
+        $riAvg = $d.Commitments.RIAvgUtilization
+        $script:RIUtilText.Text = if ($riAvg -ge 0) { "$riAvg%" } else { 'N/A' }
+        $riCount = $d.Commitments.Reservations.Count
+        $spCount = $d.Commitments.SavingsPlans.Count
+        $underutil = $d.Commitments.UnderutilizedRIs
+        $detailParts = @()
+        if ($riCount -gt 0) { $detailParts += "$riCount RIs" }
+        if ($spCount -gt 0) { $detailParts += "$spCount SPs" }
+        if ($underutil -gt 0) { $detailParts += "$underutil underutilized" }
+        $script:RIUtilDetail.Text = if ($detailParts.Count -gt 0) { $detailParts -join ' | ' } else { 'No existing commitments found' }
+
+        # Commitment grid - combine RIs and SPs
+        $commitRows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($ri in $d.Commitments.Reservations) {
+            [void]$commitRows.Add([PSCustomObject]@{
+                Type = 'Reservation'
+                Name = $ri.Name
+                'Resource Type' = $ri.ResourceType
+                Quantity = $ri.Quantity
+                'Utilization %' = "$($ri.UtilizationPercent)%"
+                Status = $ri.Status
+            })
+        }
+        foreach ($sp in $d.Commitments.SavingsPlans) {
+            [void]$commitRows.Add([PSCustomObject]@{
+                Type = 'Savings Plan'
+                Name = $sp.Name
+                'Resource Type' = $sp.BenefitType
+                Quantity = '-'
+                'Utilization %' = "$($sp.UtilizationPercent)%"
+                Status = $sp.Status
+            })
+        }
+        if ($commitRows.Count -gt 0) {
+            $script:CommitmentGrid.ItemsSource = @($commitRows)
+        } else {
+            $script:CommitmentGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No active reservations or savings plans found.' })
+        }
+    } else {
+        $script:RIUtilText.Text = 'N/A'
+        $script:RIUtilDetail.Text = 'Could not query commitment data'
+        $script:CommitmentGrid.ItemsSource = @([PSCustomObject]@{ Status = 'Commitment utilization data not available.' })
+    }
+}
+
+#-----------------------------------------------------------------------
+# ORPHANED RESOURCES POPULATION
+#-----------------------------------------------------------------------
+function Populate-OrphanedSection {
+    $d = $script:scanData
+
+    if ($d.Orphans -and $d.Orphans.Orphans.Count -gt 0) {
+        $orphans = $d.Orphans.Orphans
+        $script:OrphanCountText.Text = "$($orphans.Count) found"
+
+        # Summarize by category
+        $byCat = $orphans | Group-Object Category
+        $catParts = $byCat | ForEach-Object { "$($_.Count) $($_.Name)" }
+        $script:OrphanDetailText.Text = ($catParts -join ', ')
+
+        $summary = "$($orphans.Count) orphaned/idle resources found across $($byCat.Count) categories. Review and delete to reduce waste."
+        $highImpact = @($orphans | Where-Object { $_.Impact -eq 'High' })
+        if ($highImpact.Count -gt 0) { $summary += " $($highImpact.Count) are high-impact." }
+        $script:OrphanSummaryText.Text = $summary
+
+        $orphanRows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($o in $orphans) {
+            [void]$orphanRows.Add([PSCustomObject]@{
+                Category      = $o.Category
+                Resource      = $o.ResourceName
+                'Resource Group' = $o.ResourceGroup
+                Location      = $o.Location
+                Detail        = $o.Detail
+                Impact        = $o.Impact
+            })
+        }
+        $script:OrphanGrid.ItemsSource = @($orphanRows)
+    } else {
+        $script:OrphanCountText.Text = '0'
+        $script:OrphanDetailText.Text = 'No orphaned resources'
+        $script:OrphanSummaryText.Text = 'No orphaned or idle resources detected. Environment looks clean.'
+        $script:OrphanGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No orphaned resources found. All disks, IPs, NICs, VMs, and App Service Plans appear to be in use.' })
+    }
+}
+
+#-----------------------------------------------------------------------
+# SUBSCRIPTION SCORECARD
+#-----------------------------------------------------------------------
+function Populate-Scorecard {
+    $d = $script:scanData
+    if (-not $d.Auth -or -not $d.Auth.Subscriptions) { return }
+
+    $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($sub in $d.Auth.Subscriptions) {
+        # Cost info
+        $costActual = 0; $costForecast = 0; $currency = 'USD'
+        if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) {
+            $c = $d.Costs[$sub.Id]
+            $costActual = $c.Actual
+            $costForecast = $c.Forecast
+            $currency = $c.Currency
+        }
+        $sym = Get-CurrencySymbol $currency
+
+        # Tag compliance
+        $tagScore = 'N/A'
+        if ($d.Tags -and $d.Tags.PerSubscription -and $d.Tags.PerSubscription.ContainsKey($sub.Id)) {
+            $tagScore = "$($d.Tags.PerSubscription[$sub.Id].Coverage)%"
+        } elseif ($d.Tags) {
+            $tagScore = "$($d.Tags.TagCoverage)%"
+        }
+
+        # Optimization count
+        $optCount = 0
+        if ($d.Optimization -and $d.Optimization.Recommendations) {
+            $optCount += @($d.Optimization.Recommendations | Where-Object { $_.SubscriptionId -eq $sub.Id }).Count
+        }
+
+        # Orphan count
+        $orphanCount = 0
+        if ($d.Orphans -and $d.Orphans.Orphans) {
+            $orphanCount = @($d.Orphans.Orphans | Where-Object { $_.SubscriptionId -eq $sub.Id }).Count
+        }
+
+        # Budget risk
+        $budgetRisk = 'No Budget'
+        if ($d.Budgets -and $d.Budgets.Budgets) {
+            $subBudgets = @($d.Budgets.Budgets | Where-Object { $_.SubscriptionId -eq $sub.Id })
+            if ($subBudgets.Count -gt 0) {
+                $worstRisk = ($subBudgets | Sort-Object PercentUsed -Descending | Select-Object -First 1).Risk
+                $budgetRisk = $worstRisk
+            }
+        }
+
+        # Cost trend direction
+        $trendDir = '-'
+        if ($d.CostTrend -and $d.CostTrend.HasData -and $d.CostTrend.Months.Count -ge 2) {
+            $last = $d.CostTrend.Months[$d.CostTrend.Months.Count - 1].Cost
+            $prev = $d.CostTrend.Months[$d.CostTrend.Months.Count - 2].Cost
+            if ($prev -gt 0) {
+                $pct = [math]::Round((($last - $prev) / $prev) * 100, 1)
+                $trendDir = if ($pct -gt 5) { "Up $pct%" } elseif ($pct -lt -5) { "Down $([math]::Abs($pct))%" } else { 'Stable' }
+            }
+        }
+
+        [void]$rows.Add([PSCustomObject]@{
+            Subscription     = $sub.Name
+            'Actual (MTD)'   = "$sym$($costActual.ToString('N2'))"
+            'Forecast'       = "$sym$($costForecast.ToString('N2'))"
+            'Tag Coverage'   = $tagScore
+            'Optimizations'  = $optCount
+            'Orphaned'       = $orphanCount
+            'Budget Status'  = $budgetRisk
+            'Cost Trend'     = $trendDir
+        })
+    }
+
+    $script:ScorecardGrid.ItemsSource = @($rows | Sort-Object { [double]($_.'Actual (MTD)' -replace '[^0-9.]','') } -Descending)
+}
+
 # -- Export Function ----------------------------------------------------
 function Export-ScanReport {
     $d = $script:scanData
@@ -1033,29 +1306,46 @@ $script:scanStages = @(
     @{ Label = 'Querying 6-month cost trend...';       Pct = 60;  Action = {
         $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Scanning AHB opportunities...';        Pct = 70;  Action = {
+    @{ Label = 'Scanning AHB opportunities...';        Pct = 64;  Action = {
         $script:scanData.AHB = Get-AHBOpportunities -Subscriptions $script:scanData.Auth.Subscriptions
+    }}
+    @{ Label = 'Scanning commitment utilization...';   Pct = 68;  Action = {
+        $script:scanData.Commitments = Get-CommitmentUtilization -Subscriptions $script:scanData.Auth.Subscriptions
+    }}
+    @{ Label = 'Scanning orphaned resources...';       Pct = 72;  Action = {
+        $script:scanData.Orphans = Get-OrphanedResources -Subscriptions $script:scanData.Auth.Subscriptions
     }}
     @{ Label = 'Loading reservation advice...';        Pct = 76;  Action = {
         $script:scanData.Reservations = Get-ReservationAdvice -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Loading optimization advice...';       Pct = 82;  Action = {
+    @{ Label = 'Loading optimization advice...';       Pct = 80;  Action = {
         $script:scanData.Optimization = Get-OptimizationAdvice -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Analyzing tag compliance...';          Pct = 86;  Action = {
+    @{ Label = 'Querying budget status...';            Pct = 83;  Action = {
+        $script:scanData.Budgets = Get-BudgetStatus -Subscriptions $script:scanData.Auth.Subscriptions -CostData $script:scanData.Costs
+    }}
+    @{ Label = 'Calculating savings realized...';      Pct = 86;  Action = {
+        $script:scanData.Savings = Get-SavingsRealized -Subscriptions $script:scanData.Auth.Subscriptions
+    }}
+    @{ Label = 'Analyzing tag compliance...';          Pct = 88;  Action = {
         $tagNames = if ($script:scanData.Tags) { $script:scanData.Tags.TagNames } else { @{} }
         $script:scanData.TagRecs = Get-TagRecommendations -ExistingTags $tagNames
     }}
-    @{ Label = 'Querying billing structure...';        Pct = 90;  Action = {
+    @{ Label = 'Querying billing structure...';        Pct = 91;  Action = {
         $script:scanData.Billing = Get-BillingStructure
     }}
     @{ Label = 'Building dashboard...';                Pct = 96;  Action = {
         try { Populate-OverviewTab }      catch { Write-Warning "Populate-OverviewTab failed: $($_.Exception.Message)" }
         try { Populate-CostTab }           catch { Write-Warning "Populate-CostTab failed: $($_.Exception.Message)" }
         try { Populate-TrendChart }        catch { Write-Warning "Populate-TrendChart failed: $($_.Exception.Message)" }
+        try { Populate-AnomalySection }    catch { Write-Warning "Populate-AnomalySection failed: $($_.Exception.Message)" }
         try { Populate-TagsTab }           catch { Write-Warning "Populate-TagsTab failed: $($_.Exception.Message)" }
         try { Populate-MissingTagButtons } catch { Write-Warning "Populate-MissingTagButtons failed: $($_.Exception.Message)" }
+        try { Populate-CommitmentSection } catch { Write-Warning "Populate-CommitmentSection failed: $($_.Exception.Message)" }
+        try { Populate-OrphanedSection }   catch { Write-Warning "Populate-OrphanedSection failed: $($_.Exception.Message)" }
         try { Populate-OptimizationTab }   catch { Write-Warning "Populate-OptimizationTab failed: $($_.Exception.Message)" }
+        try { Populate-BudgetSection }     catch { Write-Warning "Populate-BudgetSection failed: $($_.Exception.Message)" }
+        try { Populate-Scorecard }         catch { Write-Warning "Populate-Scorecard failed: $($_.Exception.Message)" }
         try { Populate-BillingTab }        catch { Write-Warning "Populate-BillingTab failed: $($_.Exception.Message)" }
         try { Populate-GuidanceTab }       catch { Write-Warning "Populate-GuidanceTab failed: $($_.Exception.Message)" }
         $script:tagDeployScopesLoaded = $false   # Reset so scopes reload on next tag deploy

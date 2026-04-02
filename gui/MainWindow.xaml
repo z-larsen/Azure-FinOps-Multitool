@@ -158,38 +158,50 @@
 
                             <!-- Summary Cards Row -->
                             <WrapPanel Margin="0,10,0,10">
-                                <Border Style="{StaticResource Card}" Width="210">
+                                <Border Style="{StaticResource Card}" Width="190">
                                     <StackPanel>
                                         <TextBlock Text="Contract Type" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="ContractTypeText" Text="&#x2014;" FontSize="18" FontWeight="Bold" Foreground="#0078D4" Margin="0,4,0,0"/>
+                                        <TextBlock x:Name="ContractTypeText" Text="&#x2014;" FontSize="16" FontWeight="Bold" Foreground="#0078D4" Margin="0,4,0,0"/>
                                         <TextBlock x:Name="ContractDetailText" Text="" FontSize="11" Foreground="#999" Margin="0,2,0,0"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="210">
+                                <Border Style="{StaticResource Card}" Width="190">
                                     <StackPanel>
                                         <TextBlock Text="Month-to-Date Spend" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="TotalCostText" Text="&#x2014;" FontSize="24" FontWeight="Bold" Foreground="#D83B01" Margin="0,4,0,0"/>
+                                        <TextBlock x:Name="TotalCostText" Text="&#x2014;" FontSize="20" FontWeight="Bold" Foreground="#D83B01" Margin="0,4,0,0"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="210">
+                                <Border Style="{StaticResource Card}" Width="190">
                                     <StackPanel>
                                         <TextBlock Text="Forecasted Spend" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="ForecastText" Text="&#x2014;" FontSize="24" FontWeight="Bold" Foreground="#8764B8" Margin="0,4,0,0"/>
+                                        <TextBlock x:Name="ForecastText" Text="&#x2014;" FontSize="20" FontWeight="Bold" Foreground="#8764B8" Margin="0,4,0,0"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="210">
+                                <Border Style="{StaticResource Card}" Width="190">
                                     <StackPanel>
                                         <TextBlock Text="Subscriptions" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="SubCountText" Text="&#x2014;" FontSize="24" FontWeight="Bold" Foreground="#0078D4" Margin="0,4,0,0"/>
+                                        <TextBlock x:Name="SubCountText" Text="&#x2014;" FontSize="20" FontWeight="Bold" Foreground="#0078D4" Margin="0,4,0,0"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="210">
+                                <Border Style="{StaticResource Card}" Width="190">
                                     <StackPanel>
                                         <TextBlock Text="Est. Annual Savings" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="TotalSavingsText" Text="&#x2014;" FontSize="24" FontWeight="Bold" Foreground="#107C10" Margin="0,4,0,0"/>
+                                        <TextBlock x:Name="TotalSavingsText" Text="&#x2014;" FontSize="20" FontWeight="Bold" Foreground="#107C10" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource Card}" Width="190">
+                                    <StackPanel>
+                                        <TextBlock Text="Savings Realized" FontSize="11" Foreground="#999"/>
+                                        <TextBlock x:Name="SavingsRealizedText" Text="&#x2014;" FontSize="20" FontWeight="Bold" Foreground="#107C10" Margin="0,4,0,0"/>
+                                        <TextBlock x:Name="SavingsRealizedDetail" Text="" FontSize="11" Foreground="#999" Margin="0,2,0,0"/>
                                     </StackPanel>
                                 </Border>
                             </WrapPanel>
+
+                            <!-- Budget Status -->
+                            <TextBlock Text="Budget Status" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="BudgetSummaryText" Text="" FontSize="12" Foreground="#666" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                            <DataGrid x:Name="BudgetGrid" MaxHeight="200"/>
 
                             <!-- Subscription Cost Table -->
                             <TextBlock Text="Subscription Costs" Style="{StaticResource SectionHeader}"/>
@@ -200,6 +212,13 @@
                             <TextBlock x:Name="ResourceCountNote" FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
                             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                                 <DataGrid x:Name="ResourceCostGrid" MaxHeight="500" MinWidth="900"/>
+                            </ScrollViewer>
+
+                            <!-- Subscription Scorecard -->
+                            <TextBlock Text="Subscription Scorecard" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Per-subscription health summary combining cost trend, tag compliance, optimization opportunities, and budget status." FontSize="11" Foreground="#999" Margin="0,0,0,6" TextWrapping="Wrap"/>
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                                <DataGrid x:Name="ScorecardGrid" MaxHeight="300" MinWidth="900"/>
                             </ScrollViewer>
 
                         </StackPanel>
@@ -218,6 +237,11 @@
                                     BorderBrush="#DDD" BorderThickness="1">
                                 <Canvas x:Name="TrendChart" Height="220" ClipToBounds="True"/>
                             </Border>
+
+                            <!-- Cost Anomalies -->
+                            <TextBlock Text="Cost Anomalies" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="AnomalyNote" Text="Subscriptions with 25%+ month-over-month cost changes." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <DataGrid x:Name="AnomalyGrid" MaxHeight="200"/>
 
                             <!-- Cost by Tag -->
                             <TextBlock x:Name="CostByTagHeader" Text="Cost by Tag" Style="{StaticResource SectionHeader}"/>
@@ -300,28 +324,28 @@
 
                             <!-- Savings Summary Cards -->
                             <WrapPanel Margin="0,10,0,10">
-                                <Border Style="{StaticResource Card}" Width="220">
+                                <Border Style="{StaticResource Card}" Width="200">
                                     <StackPanel>
                                         <TextBlock Text="AHB Opportunities" FontSize="11" Foreground="#999"/>
                                         <TextBlock x:Name="AHBCountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#D83B01"/>
                                         <TextBlock x:Name="AHBDetailText" Text="" FontSize="11" Foreground="#999"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="220">
+                                <Border Style="{StaticResource Card}" Width="200">
                                     <StackPanel>
-                                        <TextBlock Text="Reserved Instances" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="RICountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#8764B8"/>
-                                        <TextBlock x:Name="RISavingsText" Text="" FontSize="11" Foreground="#999"/>
+                                        <TextBlock Text="Orphaned Resources" FontSize="11" Foreground="#999"/>
+                                        <TextBlock x:Name="OrphanCountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#D83B01"/>
+                                        <TextBlock x:Name="OrphanDetailText" Text="" FontSize="11" Foreground="#999"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="220">
+                                <Border Style="{StaticResource Card}" Width="200">
                                     <StackPanel>
-                                        <TextBlock Text="Savings Plans" FontSize="11" Foreground="#999"/>
-                                        <TextBlock x:Name="SPCountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#0078D4"/>
-                                        <TextBlock x:Name="SPSavingsText" Text="" FontSize="11" Foreground="#999"/>
+                                        <TextBlock Text="RI Utilization" FontSize="11" Foreground="#999"/>
+                                        <TextBlock x:Name="RIUtilText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#8764B8"/>
+                                        <TextBlock x:Name="RIUtilDetail" Text="" FontSize="11" Foreground="#999"/>
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource Card}" Width="220">
+                                <Border Style="{StaticResource Card}" Width="200">
                                     <StackPanel>
                                         <TextBlock Text="Advisor Optimizations" FontSize="11" Foreground="#999"/>
                                         <TextBlock x:Name="AdvisorCountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#0078D4"/>
@@ -329,6 +353,17 @@
                                     </StackPanel>
                                 </Border>
                             </WrapPanel>
+
+                            <!-- Commitment Utilization Section -->
+                            <TextBlock Text="Commitment Utilization &#x2014; Existing RIs &amp; Savings Plans" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Shows how well your existing reservations and savings plans are being used. Target 80%+ utilization. Underutilized commitments are wasted spend." FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <DataGrid x:Name="CommitmentGrid" MaxHeight="200"/>
+
+                            <!-- Orphaned Resources Section -->
+                            <TextBlock Text="Orphaned &amp; Idle Resources" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Resources costing money but serving no purpose: orphaned disks, unattached IPs/NICs, empty App Service Plans, deallocated VMs, and old snapshots." FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <TextBlock x:Name="OrphanSummaryText" Text="" FontSize="12" Foreground="#666" Margin="0,0,0,8"/>
+                            <DataGrid x:Name="OrphanGrid" MaxHeight="300"/>
 
                             <!-- AHB Section -->
                             <TextBlock Text="Azure Hybrid Benefit &#x2014; Eligible Resources" Style="{StaticResource SectionHeader}"/>
