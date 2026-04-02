@@ -19,9 +19,6 @@ pillars: **Understand**, **Quantify**, and **Optimize**.
 ### Overview — Cost Summary, Budget Status & Subscription Scorecard
 ![Overview](screenshots/overview.png)
 
-### Cost Analysis — Trend Chart, Anomalies & Cost by Tag
-![Cost Analysis](screenshots/cost-analysis.png)
-
 ### Tags — Inventory & CAF Compliance
 ![Tags](screenshots/tags.png)
 
