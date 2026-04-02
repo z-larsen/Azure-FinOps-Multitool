@@ -203,7 +203,12 @@ function Populate-OverviewTab {
 
     # Subscription count
     $subCount = $d.Auth.Subscriptions.Count
-    $script:SubCountText.Text = $subCount.ToString()
+    $skippedCount = if ($d.Auth.SkippedSubs) { $d.Auth.SkippedSubs.Count } else { 0 }
+    if ($skippedCount -gt 0) {
+        $script:SubCountText.Text = "$subCount (+$skippedCount skipped)"
+    } else {
+        $script:SubCountText.Text = $subCount.ToString()
+    }
 
     # Total costs
     $totalActual = 0; $totalForecast = 0; $currency = 'USD'

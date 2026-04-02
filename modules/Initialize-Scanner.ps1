@@ -153,10 +153,37 @@ function Initialize-Scanner {
     $subscriptions = @(Get-AzSubscription -TenantId $tenantId -ErrorAction SilentlyContinue |
         Where-Object { $_.State -eq 'Enabled' })
 
+    # Categorize subscriptions: separate VS/MSDN/DevTest/Free subs
+    # These have spending limits, often fail Cost Management APIs, and
+    # looping through hundreds of them in a large tenant wastes hours.
+    $prodSubs = [System.Collections.Generic.List[object]]::new()
+    $skippedSubs = [System.Collections.Generic.List[object]]::new()
+
+    $skipPatterns = @(
+        'Visual Studio', 'MSDN', 'Dev/Test', 'DevTest',
+        'Free Trial', 'Sponsorship', 'Access to Azure Active Directory',
+        'Azure Pass', 'BizSpark', 'Imagine', 'MPN', 'Azure in Open'
+    )
+    $skipRegex = ($skipPatterns | ForEach-Object { [regex]::Escape($_) }) -join '|'
+
+    foreach ($sub in $subscriptions) {
+        if ($sub.Name -match $skipRegex) {
+            [void]$skippedSubs.Add($sub)
+        } else {
+            [void]$prodSubs.Add($sub)
+        }
+    }
+
+    if ($skippedSubs.Count -gt 0) {
+        Write-Host "  Subscriptions: $($prodSubs.Count) production, $($skippedSubs.Count) skipped (VS/MSDN/DevTest/Free)" -ForegroundColor Yellow
+    }
+
     return [PSCustomObject]@{
-        TenantId      = $tenantId
-        AccountName   = $accountName
-        Subscriptions = $subscriptions
-        Environment   = $ctx.Environment.Name
+        TenantId         = $tenantId
+        AccountName      = $accountName
+        Subscriptions    = @($prodSubs)
+        AllSubscriptions = $subscriptions
+        SkippedSubs      = @($skippedSubs)
+        Environment      = $ctx.Environment.Name
     }
 }
