@@ -87,18 +87,59 @@ policyresources
         Write-Warning "  Resource Graph policy query failed: $($_.Exception.Message)"
     }
 
-    # -- Strategy 2: Per-sub compliance summary --------------------------
-    # (MG-scope summarize API can hang indefinitely; skip it and go direct)
-    {
-        $compSubs = if ($subCount -gt 50) {
-            Write-Host "  Sampling compliance from 10 of $subCount subs..." -ForegroundColor Yellow
-            $Subscriptions | Select-Object -First 10
-        } else { $Subscriptions }
+    # -- Strategy 2: Resource Graph for compliance (tenant-wide, fast) ---
+    # The MG-scope PolicyInsights summarize REST API hangs indefinitely,
+    # and per-sub REST loops are slow on large tenants.
+    # Resource Graph policyresources table gives us compliance across ALL
+    # subscriptions in a single paginated call - fast and complete.
+    try {
+        Write-Host "  Querying policy compliance via Resource Graph..." -ForegroundColor Cyan
+        $compQuery = @"
+policyresources
+| where type =~ 'microsoft.policyinsights/policystates'
+| extend complianceState = tostring(properties.complianceState)
+| summarize
+    Compliant    = countif(complianceState =~ 'Compliant'),
+    NonCompliant = countif(complianceState =~ 'NonCompliant'),
+    Total        = count()
+    by subscriptionId
+"@
+        $subIds = $Subscriptions | ForEach-Object { $_.Id }
+        $compResult = Search-AzGraph -Query $compQuery -Subscription $subIds -First 1000 -ErrorAction Stop
 
-        Write-Host "  Querying policy compliance ($($compSubs.Count) subscriptions)..." -ForegroundColor Cyan
+        if ($compResult -and $compResult.Data -and $compResult.Data.Count -gt 0) {
+            foreach ($row in $compResult.Data) {
+                $subName = $row.subscriptionId
+                $matchSub = $Subscriptions | Where-Object { $_.Id -eq $row.subscriptionId } | Select-Object -First 1
+                if ($matchSub) { $subName = $matchSub.Name }
+
+                $complianceMap[$row.subscriptionId] = [PSCustomObject]@{
+                    Subscription   = $subName
+                    SubscriptionId = $row.subscriptionId
+                    TotalResources = $row.Total
+                    NonCompliant   = $row.NonCompliant
+                    Compliant      = $row.Compliant
+                    PolicyCount    = 0
+                }
+            }
+            $gotCompliance = $true
+            Write-Host "  Resource Graph compliance: $($complianceMap.Count) subscriptions" -ForegroundColor Green
+        }
+    } catch {
+        Write-Warning "  Resource Graph compliance query failed: $($_.Exception.Message)"
+    }
+
+    # -- Compliance fallback: per-sub REST (only if ARG compliance failed) --
+    if (-not $gotCompliance) {
+        Write-Host "  Falling back to per-sub compliance queries..." -ForegroundColor Yellow
         $i = 0
-        foreach ($sub in $compSubs) {
+        foreach ($sub in $Subscriptions) {
             $i++
+            if ($subCount -gt 20 -and ($i % 10 -eq 0)) {
+                if (Get-Command Update-ScanStatus -ErrorAction SilentlyContinue) {
+                    Update-ScanStatus "Scanning policy compliance ($i/$subCount)..."
+                }
+            }
             try {
                 $compPath = "/subscriptions/$($sub.Id)/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01"
                 $compResp = Invoke-AzRestMethod -Path $compPath -Method POST -ErrorAction Stop
@@ -120,7 +161,6 @@ policyresources
                 Write-Warning "  Policy compliance failed for $($sub.Name): $($_.Exception.Message)"
             }
         }
-        if ($complianceMap.Count -gt 0) { $gotCompliance = $true }
     }
 
     # -- Strategy 3: Per-sub fallback (only if Resource Graph failed) ---
