@@ -31,7 +31,7 @@ function Deploy-ResourceTag {
     Write-Host "  Deploying tag '$TagName=$TagValue' to scope: $Scope" -ForegroundColor Cyan
 
     # Use the Tags API to merge (preserves existing tags)
-    $tagsPath = "$Scope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
+    $uri = "https://management.azure.com$Scope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
 
     $body = @{
         operation  = 'Merge'
@@ -42,31 +42,52 @@ function Deploy-ResourceTag {
         }
     } | ConvertTo-Json -Depth 5
 
+    # Use Invoke-WebRequest with timeout to prevent indefinite hanging
+    # (Invoke-AzRestMethod has no timeout parameter)
+    $token = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com').Token
+    $headers = @{
+        'Authorization' = "Bearer $token"
+        'Content-Type'  = 'application/json'
+    }
+
     try {
-        $response = Invoke-AzRestMethod -Path $tagsPath -Method PATCH -Payload $body -ErrorAction Stop
-        if ($response.StatusCode -in @(200, 201)) {
+        $response = Invoke-WebRequest -Uri $uri -Method PATCH -Body $body -Headers $headers `
+            -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        if ([int]$response.StatusCode -in @(200, 201)) {
             Write-Host "    Tag deployed successfully." -ForegroundColor Green
             return [PSCustomObject]@{
-                Success = $true
-                Message = "Tag '$TagName=$TagValue' applied to $Scope"
-                StatusCode = $response.StatusCode
+                Success    = $true
+                Message    = "Tag '$TagName=$TagValue' applied to $Scope"
+                StatusCode = [int]$response.StatusCode
             }
         } else {
             $errBody = ($response.Content | ConvertFrom-Json -ErrorAction SilentlyContinue)
             $errMsg = if ($errBody.error) { $errBody.error.message } else { "HTTP $($response.StatusCode)" }
             Write-Warning "    Tag deployment failed: $errMsg"
             return [PSCustomObject]@{
-                Success = $false
-                Message = $errMsg
-                StatusCode = $response.StatusCode
+                Success    = $false
+                Message    = $errMsg
+                StatusCode = [int]$response.StatusCode
             }
         }
     } catch {
-        Write-Warning "    Tag deployment error: $($_.Exception.Message)"
+        $errMsg  = $_.Exception.Message
+        $statusCode = 0
+        # Extract error details from HTTP error responses
+        if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            try {
+                $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                $errContent = $sr.ReadToEnd(); $sr.Close()
+                $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($errBody.error) { $errMsg = $errBody.error.message }
+            } catch {}
+        }
+        Write-Warning "    Tag deployment failed: $errMsg"
         return [PSCustomObject]@{
-            Success = $false
-            Message = $_.Exception.Message
-            StatusCode = 0
+            Success    = $false
+            Message    = $errMsg
+            StatusCode = $statusCode
         }
     }
 }
@@ -95,7 +116,7 @@ function Get-TagScopes {
         # Get resource groups
         try {
             $rgPath = "/subscriptions/$($sub.Id)/resourcegroups?api-version=2021-04-01"
-            $resp = Invoke-AzRestMethod -Path $rgPath -Method GET -ErrorAction SilentlyContinue
+            $resp = Invoke-AzRestMethodWithRetry -Path $rgPath -Method GET
             if ($resp.StatusCode -eq 200) {
                 $rgs = ($resp.Content | ConvertFrom-Json).value
                 foreach ($rg in $rgs) {

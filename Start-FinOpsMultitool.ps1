@@ -2749,23 +2749,90 @@ $script:TagDeployButton.Add_Click({
     $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
     $script:TagDeployButton.IsEnabled = $false
 
-    # Flush UI render queue so status text is visible during the blocking REST call
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-        [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
-
+    # Get bearer token on the main thread (Az context is available here)
     try {
-        $result = Deploy-ResourceTag -Scope $scope -TagName $tagName -TagValue $tagValue
-        if ($result.Success) {
+        $token = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com').Token
+    } catch {
+        $script:TagDeployStatus.Text = "Failed: Could not get access token - $($_.Exception.Message)"
+        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        $script:TagDeployButton.IsEnabled = $true
+        return
+    }
+
+    # Run the REST call in a background runspace so the WPF UI stays responsive.
+    # Uses Invoke-WebRequest (not Invoke-AzRestMethod) because:
+    #   1) Invoke-AzRestMethod has no timeout parameter and can hang indefinitely
+    #   2) Invoke-WebRequest supports -TimeoutSec
+    #   3) No Az module needed in the runspace -- just the bearer token
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        param($deployScope, $deployTagName, $deployTagValue, $deployToken)
+        $uri = "https://management.azure.com$deployScope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
+        $body = @{
+            operation  = 'Merge'
+            properties = @{ tags = @{ $deployTagName = $deployTagValue } }
+        } | ConvertTo-Json -Depth 5
+        $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
+        try {
+            $resp = Invoke-WebRequest -Uri $uri -Method Patch -Body $body -Headers $hdrs `
+                -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+            [PSCustomObject]@{ Success = $true; Message = "Tag '$deployTagName=$deployTagValue' applied"; StatusCode = [int]$resp.StatusCode }
+        } catch {
+            $errMsg = $_.Exception.Message
+            $sc = 0
+            if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+                $sc = [int]$_.Exception.Response.StatusCode
+                try {
+                    $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                    $errContent = $sr.ReadToEnd(); $sr.Close()
+                    $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
+                    if ($errBody.error) { $errMsg = $errBody.error.message }
+                } catch {}
+            }
+            [PSCustomObject]@{ Success = $false; Message = $errMsg; StatusCode = $sc }
+        }
+    }).AddArgument($scope).AddArgument($tagName).AddArgument($tagValue).AddArgument($token)
+
+    $asyncResult = $ps.BeginInvoke()
+    $deadline = (Get-Date).AddSeconds(35)   # slightly > the 30s REST timeout
+
+    # DispatcherFrame loop: processes WPF render/input messages while waiting
+    while (-not $asyncResult.IsCompleted -and (Get-Date) -lt $deadline) {
+        $frame = [System.Windows.Threading.DispatcherFrame]::new()
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+            [System.Windows.Threading.DispatcherPriority]::Background,
+            [action]{ $frame.Continue = $false }
+        )
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+        Start-Sleep -Milliseconds 100
+    }
+
+    if ($asyncResult.IsCompleted) {
+        try {
+            $results = $ps.EndInvoke($asyncResult)
+            $result = if ($results.Count -gt 0) { $results[0] } else { $null }
+        } catch {
+            $result = [PSCustomObject]@{ Success = $false; Message = $_.Exception.Message }
+        }
+        if ($result -and $result.Success) {
             $script:TagDeployStatus.Text = "Deployed: $tagName=$tagValue"
             $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
         } else {
-            $script:TagDeployStatus.Text = "Failed: $($result.Message)"
+            $errMsg = if ($result) { $result.Message } else { 'Unknown error' }
+            $script:TagDeployStatus.Text = "Failed: $errMsg"
             $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
         }
-    } catch {
-        $script:TagDeployStatus.Text = "Failed: $($_.Exception.Message)"
+    } else {
+        $ps.Stop()
+        $script:TagDeployStatus.Text = 'Failed: Deployment timed out after 30 seconds'
         $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
     }
+
+    $ps.Dispose()
+    $rs.Close()
     $script:TagDeployButton.IsEnabled = $true
 })
 
