@@ -56,14 +56,17 @@ function Invoke-AzRestMethodWithRetry {
             Update-ScanStatus "Rate limited - waiting $($retryAfter)s before retry ($($attempt+1)/$MaxRetries)..."
         }
 
-        # Use dispatcher-friendly sleep to keep WPF UI responsive
+        # Dispatcher-friendly wait: use DispatcherFrame to create a nested
+        # message loop that keeps the WPF UI responsive during the delay.
         $waitEnd = (Get-Date).AddSeconds($retryAfter)
         while ((Get-Date) -lt $waitEnd) {
-            # Pump WPF messages so the UI doesn't freeze
-            [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-                [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::Background,
+                [action]{ $frame.Continue = $false }
             )
-            Start-Sleep -Milliseconds 250
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+            Start-Sleep -Milliseconds 100
         }
     }
     return $resp  # Return last 429 response if all retries exhausted
