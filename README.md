@@ -58,8 +58,8 @@ The FinOps Multitool is a lightweight, read‑only scanner designed to complemen
 | **Budget Status**   | Consumption Budgets API           | Budget vs actual per subscription, % used, risk level      |
 | **Savings Realized** | Cost Management (ActualCost + AmortizedCost) | Monthly savings from existing RIs, Savings Plans, and AHB |
 | **Scorecard**       | All of the above                  | Per-subscription health: cost, tags, optimizations, budget, trend |
-| **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against Microsoft's recommended tag strategy   |
-| **Policy Inventory** | Resource Graph + Policy Insights API | All policy assignments across the tenant with compliance state |
+| **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against Microsoft's recommended tag strategy with deployment location |
+| **Policy Inventory** | ARM Policy Assignment API + Resource Graph | All effective policy assignments including MG-inherited, with compliance state |
 | **Policy Recs**     | 15 curated FinOps built-in policies | Missing cost/tagging policies with deploy-from-GUI capability |
 | **Policy Deploy**   | ARM Policy Assignment API (PUT)   | Deploy recommended policies with desired effect (Audit/Deny/etc.) |
 | **Billing**         | Billing Accounts/Profiles API     | Billing accounts, profiles, invoice sections, EA depts     |
@@ -179,8 +179,8 @@ a `DispatcherTimer` so the UI updates between stages.
 | 13    | Get-OptimizationAdvice    | `Search-AzGraph` (advisorresources)       | ~3s   |
 | 14    | Get-BudgetStatus          | REST: Consumption Budgets API (per sub)   | ~3s   |
 | 15    | Get-SavingsRealized       | REST: Cost Management (ActualCost + AmortizedCost) + ARG | ~5s |
-| 16    | Get-TagRecommendations    | Local comparison (no API call)            | <1s   |
-| 17    | Get-PolicyInventory       | Resource Graph + Policy Insights (MG scope) | ~3s |
+| 16    | Get-TagRecommendations    | Local comparison + tag location map       | <1s   |
+| 17    | Get-PolicyInventory       | ARM REST API (all effective) + Resource Graph compliance | ~3s |
 | 18    | Get-PolicyRecommendations | Local comparison (no API call)            | <1s   |
 | 19    | Get-BillingStructure      | REST: Billing Accounts/Profiles/Sections  | ~3s   |
 
@@ -231,6 +231,12 @@ a `DispatcherTimer` so the UI updates between stages.
 | Tag deployment via ARM Tags API | PATCH merge preserves existing tags; only adds/updates the target tag |
 | Policy deployment via ARM PUT | Deploy recommended FinOps policies with user-selected effect (Audit/Deny/etc.) |
 | Lazy scope loading for tag deploy | Subscription/RG list fetched on first tag deploy click, cached for session |
+| Background runspace for tag deploy | Tag deployment runs in a background runspace with 30s timeout; UI stays responsive via DispatcherFrame polling |
+| MG-scope fail-once flag | First cost module that gets 401/403 at MG scope sets a shared flag; all subsequent modules skip to per-sub instantly instead of retrying |
+| 429 throttle retry | `Invoke-AzRestMethodWithRetry` wraps all REST calls with automatic retry on HTTP 429, exponential backoff, and DispatcherFrame UI-responsive wait |
+| Resource Graph safe wrapper | `Search-AzGraphSafe` runs all Resource Graph calls in background runspaces with 60s timeout, 429 retry, and JSON round-trip to preserve nested properties |
+| Tag compliance location column | Tag recommendations grid shows where each present tag is deployed (Subscription / Resource Group) |
+| MG-inherited policy discovery | ARM REST API `GET policyAssignments` returns all effective policies including those inherited from management groups and tenant root |
 | Billing structure discovery | Queries billing accounts, profiles, invoice sections, EA departments, and cost allocation rules |
 | Commitment utilization tracking | Queries Reservation Summaries + Benefit Utilization APIs to show RI/SP usage % |
 | Orphaned resource detection | 6 Resource Graph KQL queries find waste: orphaned disks, unattached IPs/NICs, deallocated VMs, empty ASPs, old snapshots |
@@ -264,6 +270,10 @@ a `DispatcherTimer` so the UI updates between stages.
 | Forecast shows $0.00 | Forecast not available for account type | Common for MCA in first billing period |
 | Resources table shows blue bar only | DataGrid binding issue | Ensure `@()` wrapper on ItemsSource |
 | Scan hangs at 90% | Large tenant with many subscriptions | Fixed: adaptive sampling skips empty subs; Resource Graph replaces per-sub loops |
+| Tag deploy hangs | ARM PATCH call blocks indefinitely | Fixed: runs in background runspace with 30s timeout; fails gracefully |
+| 429 rate limiting mid-scan | Cost Management API throttles at ~10 req/min | Fixed: automatic retry with exponential backoff; UI stays responsive |
+| Tag coverage shows 0% | Aggregate count queries fail silently | Fixed: uses direct REST API for aggregate counts with detail-count fallback |
+| Policy shows only sub-scoped | MG-inherited policies missing | Fixed: ARM REST API returns all effective assignments including inherited |
 | Gov tenant not detected | No existing Az session | Click Choose Tenant — auto-detects on login |
 | Console shows subscription picker | Az.Accounts 12+ login experience | Fixed — tool sets `AZURE_LOGIN_EXPERIENCE_V2=Off` |
 | Tool stays minimized | Auth error during Connect-AzAccount | Fixed — try/finally ensures window restores |
@@ -285,7 +295,16 @@ Tested with tenants from 1 subscription to 300+. Key scalability features:
 - **DataGrid virtualization** — Row and column virtualization with recycling
   enabled so WPF only renders visible rows
 - **MG-scope-first queries** — Cost and tag queries try a single MG-scope
-  call before falling back to per-subscription loops
+  call before falling back to per-subscription loops. A shared fail-once flag
+  ensures only one module probes MG-scope — if it returns 401/403, all
+  subsequent modules skip to per-sub instantly
+- **Throttle-resilient REST calls** — `Invoke-AzRestMethodWithRetry` wraps
+  all Cost Management and ARM REST calls with automatic 429 retry, exponential
+  backoff (10-60s), and DispatcherFrame-based UI-responsive waiting
+- **Resource Graph safe wrapper** — `Search-AzGraphSafe` runs all Resource
+  Graph queries in background runspaces with 60-second timeout and 429 retry.
+  JSON serialization inside the runspace preserves nested property hierarchy
+  across the process boundary
 - **Resource Graph everywhere** — Policy inventory, Advisor, RI/SP, tags,
   AHB, and orphaned resources all use Resource Graph for single cross-tenant
   calls instead of per-sub REST loops
@@ -313,9 +332,9 @@ Tested with tenants from 1 subscription to 300+. Key scalability features:
 ## Future Enhancements
 
 - [ ] C# / WPF conversion (full MVVM, async data loading)
-- [ ] Budget vs. actual comparison per subscription
-- [x] ~~Cost trend chart (last 6 months)~~ — Implemented: WPF Canvas bar chart
-- [ ] Anomaly detection (spike alerts)
+- [x] ~~Budget vs. actual comparison per subscription~~ — Implemented: Budget Status module with risk levels
+- [x] ~~Cost trend chart (last 6 months)~~ — Implemented: WPF Canvas bar chart with per-subscription filter
+- [x] ~~Anomaly detection (spike alerts)~~ — Implemented: 25%+ MoM cost change flagging per subscription
 - [x] ~~Azure Policy compliance overlay~~ — Implemented: Policy tab with inventory, compliance %, 15 FinOps policy recs, deploy from GUI
 - [ ] PDF export with charts
 - [ ] Scheduled scan mode (run headless, email report)
