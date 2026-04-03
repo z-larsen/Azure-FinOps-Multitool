@@ -2619,13 +2619,9 @@ $script:TagDeployButton.Add_Click({
     $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
     $script:TagDeployButton.IsEnabled = $false
 
-    # Flush UI so 'Deploying...' renders before the blocking REST call
-    $frame = [System.Windows.Threading.DispatcherFrame]::new()
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
-        [System.Windows.Threading.DispatcherPriority]::Background,
-        [action]{ $frame.Continue = $false }
-    )
-    [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+    # Flush UI render queue so status text is visible during the blocking REST call
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
 
     try {
         $result = Deploy-ResourceTag -Scope $scope -TagName $tagName -TagValue $tagValue
@@ -2697,13 +2693,9 @@ $script:PolicyDeployButton.Add_Click({
     $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
     $script:PolicyDeployButton.IsEnabled = $false
 
-    # Flush UI so 'Deploying...' renders before the blocking REST call
-    $frame = [System.Windows.Threading.DispatcherFrame]::new()
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
-        [System.Windows.Threading.DispatcherPriority]::Background,
-        [action]{ $frame.Continue = $false }
-    )
-    [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+    # Flush UI render queue so status text is visible during the blocking REST call
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
 
     try {
         $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $defId -Effect $effect -DisplayName $displayName -AdditionalParameters $additionalParams
