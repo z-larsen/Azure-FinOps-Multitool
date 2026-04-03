@@ -29,38 +29,40 @@ function Get-PolicyInventory {
     $gotAssignments = $false
     $gotCompliance  = $false
 
-    # -- Strategy 1: Resource Graph for assignments (1 paginated call) --
+    # -- Strategy 1: ARM REST API for ALL effective assignments ----------
+    # Resource Graph policyresources at subscription scope only returns
+    # assignments AT that scope.  The ARM Policy API returns ALL effective
+    # assignments including those inherited from management groups and
+    # the tenant root group.
     try {
-        Write-Host "  Querying policy assignments via Resource Graph..." -ForegroundColor Cyan
-        $argQuery = @"
-policyresources
-| where type =~ 'microsoft.authorization/policyassignments'
-| project id, name, properties, subscriptionId, type
-"@
-        $subIds = $Subscriptions | ForEach-Object { $_.Id }
-        $skipToken = $null
-        $pageNum = 0
-        do {
-            $pageNum++
-            $result = Search-AzGraphSafe -Query $argQuery -Subscription $subIds -First 1000 -SkipToken $skipToken
-            if ($result -and $result.Data) {
-                foreach ($r in $result.Data) {
-                    $props = $r.properties
-                    $defId = $props.policyDefinitionId
+        Write-Host "  Querying policy assignments via ARM REST API..." -ForegroundColor Cyan
+        $seenIds = @{}
+        foreach ($sub in $Subscriptions) {
+            $subName = $sub.Name
+            $nextLink = "/subscriptions/$($sub.Id)/providers/Microsoft.Authorization/policyAssignments?api-version=2022-06-01"
+            while ($nextLink) {
+                $resp = Invoke-AzRestMethodWithRetry -Path $nextLink -Method GET
+                if ($resp.StatusCode -ne 200) { break }
+                $body = $resp.Content | ConvertFrom-Json
+                foreach ($a in $body.value) {
+                    # De-duplicate (same MG assignment appears under each sub)
+                    if ($seenIds.ContainsKey($a.id)) { continue }
+                    $seenIds[$a.id] = $true
 
-                    $origin = if ($defId -match '/providers/Microsoft\.Authorization/policyDefinitions/') { 'BuiltIn' } else { 'Custom' }
-                    if ($defId -match '/policySetDefinitions/') { $origin = 'Initiative' }
-
-                    # Map subscription ID to name
-                    $subName = $r.subscriptionId
-                    $matchSub = $Subscriptions | Where-Object { $_.Id -eq $r.subscriptionId } | Select-Object -First 1
-                    if ($matchSub) { $subName = $matchSub.Name }
+                    $props  = $a.properties
+                    $defId  = $props.policyDefinitionId
+                    $origin = if ($defId -match '/policySetDefinitions/') { 'Initiative' }
+                              elseif ($defId -match '/providers/Microsoft\.Authorization/policyDefinitions/') { 'BuiltIn' }
+                              else { 'Custom' }
+                    $scope  = if ($a.id -match '^(.*)/providers/Microsoft\.Authorization/policyAssignments/') {
+                                  $Matches[1]
+                              } else { '' }
 
                     [void]$allAssignments.Add([PSCustomObject]@{
-                        AssignmentName  = if ($props.displayName) { $props.displayName } else { $r.name }
-                        AssignmentId    = $r.id
+                        AssignmentName  = if ($props.displayName) { $props.displayName } else { $a.name }
+                        AssignmentId    = $a.id
                         PolicyDefId     = $defId
-                        Scope           = if ($props.scope) { $props.scope } else { ($r.id -replace '/providers/Microsoft\.Authorization/policyAssignments/.*', '') }
+                        Scope           = $scope
                         Effect          = if ($props.parameters -and $props.parameters.effect) { $props.parameters.effect.value } else { '-' }
                         EnforcementMode = if ($props.enforcementMode) { $props.enforcementMode } else { 'Default' }
                         Origin          = $origin
@@ -68,16 +70,68 @@ policyresources
                         Description     = if ($props.description) { $props.description } else { '' }
                     })
                 }
-                $skipToken = $result.SkipToken
-            } else { $skipToken = $null }
-        } while ($skipToken)
+                # Handle pagination via nextLink
+                $nextLink = if ($body.nextLink) {
+                    $body.nextLink -replace '^https://management\.azure\.com', ''
+                } else { $null }
+            }
+        }
 
         if ($allAssignments.Count -gt 0) {
             $gotAssignments = $true
-            Write-Host "  Resource Graph: $($allAssignments.Count) policy assignments across $pageNum page(s)" -ForegroundColor Green
+            Write-Host "  ARM REST API: $($allAssignments.Count) unique policy assignments (including inherited)" -ForegroundColor Green
         }
     } catch {
-        Write-Warning "  Resource Graph policy query failed: $($_.Exception.Message)"
+        Write-Warning "  ARM REST policy query failed: $($_.Exception.Message)"
+    }
+
+    # Fallback: Resource Graph if ARM REST didn't find any
+    if (-not $gotAssignments) {
+        try {
+            Write-Host "  Falling back to Resource Graph for policy assignments..." -ForegroundColor Yellow
+            $argQuery = @"
+policyresources
+| where type =~ 'microsoft.authorization/policyassignments'
+| project id, name, properties, subscriptionId, type
+"@
+            $subIds = $Subscriptions | ForEach-Object { $_.Id }
+            $skipToken = $null
+            $pageNum = 0
+            do {
+                $pageNum++
+                $result = Search-AzGraphSafe -Query $argQuery -Subscription $subIds -First 1000 -SkipToken $skipToken
+                if ($result -and $result.Data) {
+                    foreach ($r in $result.Data) {
+                        $props = $r.properties
+                        $defId = $props.policyDefinitionId
+                        $origin = if ($defId -match '/policySetDefinitions/') { 'Initiative' }
+                                  elseif ($defId -match '/providers/Microsoft\.Authorization/policyDefinitions/') { 'BuiltIn' }
+                                  else { 'Custom' }
+                        $subName = $r.subscriptionId
+                        $matchSub = $Subscriptions | Where-Object { $_.Id -eq $r.subscriptionId } | Select-Object -First 1
+                        if ($matchSub) { $subName = $matchSub.Name }
+                        [void]$allAssignments.Add([PSCustomObject]@{
+                            AssignmentName  = if ($props.displayName) { $props.displayName } else { $r.name }
+                            AssignmentId    = $r.id
+                            PolicyDefId     = $defId
+                            Scope           = if ($props.scope) { $props.scope } else { ($r.id -replace '/providers/Microsoft\.Authorization/policyAssignments/.*', '') }
+                            Effect          = if ($props.parameters -and $props.parameters.effect) { $props.parameters.effect.value } else { '-' }
+                            EnforcementMode = if ($props.enforcementMode) { $props.enforcementMode } else { 'Default' }
+                            Origin          = $origin
+                            Subscription    = $subName
+                            Description     = if ($props.description) { $props.description } else { '' }
+                        })
+                    }
+                    $skipToken = $result.SkipToken
+                } else { $skipToken = $null }
+            } while ($skipToken)
+            if ($allAssignments.Count -gt 0) {
+                $gotAssignments = $true
+                Write-Host "  Resource Graph fallback: $($allAssignments.Count) assignments" -ForegroundColor Green
+            }
+        } catch {
+            Write-Warning "  Resource Graph policy query failed: $($_.Exception.Message)"
+        }
     }
 
     # -- Strategy 2: Resource Graph for compliance (tenant-wide, fast) ---

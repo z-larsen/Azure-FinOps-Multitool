@@ -47,24 +47,25 @@ resources
         $allResults = @()
     }
 
-    # -- Query 2: Untagged resource count -------------------------------
-    $untaggedCount = 0
-    $untaggedResources = @()
+    # -- Query 2: Untagged resource count (via REST to avoid runspace issues with single-row aggregates)
     try {
-        $untaggedQuery = @"
-resources
-| where isnull(tags) or tags == '{}'
-| summarize UntaggedCount = count()
-"@
-        $uResult = Search-AzGraphSafe -Query $untaggedQuery -Subscription $subIds
-        if ($uResult.Data -and $uResult.Data.Count -gt 0) {
-            $untaggedCount = $uResult.Data[0].UntaggedCount
+        $countBody = @{
+            subscriptions = @($subIds)
+            query = "resources | where isnull(tags) or tags == '{}' | summarize UntaggedCount = count()"
+        } | ConvertTo-Json -Depth 5
+        $countResp = Invoke-AzRestMethodWithRetry -Path "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01" -Method POST -Payload $countBody
+        if ($countResp.StatusCode -eq 200) {
+            $countData = ($countResp.Content | ConvertFrom-Json)
+            if ($countData.data -and $countData.data.Count -gt 0) {
+                $untaggedCount = [int]$countData.data[0].UntaggedCount
+            }
         }
     } catch {
         Write-Warning "Untagged resource count failed: $($_.Exception.Message)"
     }
 
     # -- Query 4: Untagged resource details (top 500) -------------------
+    $untaggedResources = @()
     try {
         $untaggedDetailQuery = @"
 resources
@@ -92,16 +93,28 @@ resources
         Write-Warning "Untagged resource detail query failed: $($_.Exception.Message)"
     }
 
-    # -- Query 3: Total resource count ----------------------------------
+    # -- Query 3: Total resource count (via REST to avoid runspace issues with single-row aggregates)
     $totalCount = 0
     try {
-        $totalQuery = "resources | summarize TotalCount = count()"
-        $tResult = Search-AzGraphSafe -Query $totalQuery -Subscription $subIds
-        if ($tResult.Data -and $tResult.Data.Count -gt 0) {
-            $totalCount = $tResult.Data[0].TotalCount
+        $totalBody = @{
+            subscriptions = @($subIds)
+            query = "resources | summarize TotalCount = count()"
+        } | ConvertTo-Json -Depth 5
+        $totalResp = Invoke-AzRestMethodWithRetry -Path "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01" -Method POST -Payload $totalBody
+        if ($totalResp.StatusCode -eq 200) {
+            $totalData = ($totalResp.Content | ConvertFrom-Json)
+            if ($totalData.data -and $totalData.data.Count -gt 0) {
+                $totalCount = [int]$totalData.data[0].TotalCount
+            }
         }
     } catch {
         Write-Warning "Total resource count failed: $($_.Exception.Message)"
+    }
+
+    # Fallback: derive counts from detail data if REST queries failed
+    if ($untaggedCount -eq 0 -and $untaggedResources.Count -gt 0) {
+        $untaggedCount = $untaggedResources.Count
+        Write-Host "    Using detail query count as fallback: $untaggedCount untagged" -ForegroundColor Yellow
     }
 
     # -- Build summary --------------------------------------------------
