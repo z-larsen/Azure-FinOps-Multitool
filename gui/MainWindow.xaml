@@ -289,6 +289,11 @@
                             <TextBlock Text="Tag Inventory" Style="{StaticResource SectionHeader}"/>
                             <DataGrid x:Name="TagInventoryGrid" MaxHeight="250"/>
 
+                            <!-- Untagged Resources -->
+                            <TextBlock Text="Untagged Resources" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="UntaggedNote" Text="" FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <DataGrid x:Name="UntaggedResourcesGrid" MaxHeight="350"/>
+
                             <!-- Tag Recommendations -->
                             <TextBlock Text="Tag Recommendations (Cloud Adoption Framework)" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="TagComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>

@@ -73,6 +73,7 @@ $controls = @(
     # Tags
     'TagCountText', 'TagCoverageText', 'UntaggedCountText',
     'TagInventoryGrid', 'TagComplianceText', 'TagRecsGrid',
+    'UntaggedNote', 'UntaggedResourcesGrid',
     'MissingTagButtons', 'TagDeployPanel', 'TagDeployTitle',
     'TagScopeSelector', 'TagValueInput', 'TagDeployButton',
     'TagDeployCancelButton', 'TagDeployStatus',
@@ -384,6 +385,21 @@ function Populate-TagsTab {
             }
         }
         $script:TagInventoryGrid.ItemsSource = @($tagRows | Sort-Object 'Resources' -Descending)
+
+        # Untagged resources detail grid
+        if ($d.Tags.UntaggedResources -and $d.Tags.UntaggedResources.Count -gt 0) {
+            $total = $d.Tags.UntaggedCount
+            $shown = $d.Tags.UntaggedResources.Count
+            if ($shown -lt $total) {
+                $script:UntaggedNote.Text = "Showing $shown of $total untagged resources"
+            } else {
+                $script:UntaggedNote.Text = "$shown untagged resource$(if($shown -ne 1){'s'})"
+            }
+            $script:UntaggedResourcesGrid.ItemsSource = @($d.Tags.UntaggedResources)
+        } else {
+            $script:UntaggedNote.Text = "No untagged resources found"
+            $script:UntaggedResourcesGrid.ItemsSource = @()
+        }
     }
 
     # Tag recommendations
@@ -2334,6 +2350,18 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
             foreach ($tr in $d.TagRecs.Analysis) {
                 $statusCls = if ($tr.Status -eq 'Present') { 'status-assigned' } else { 'status-missing' }
                 [void]$sb.Append("<tr><td><strong>$($esc::Escape($tr.TagName))</strong></td><td class=`"$statusCls`">$($tr.Status)</td><td>$($esc::Escape($tr.Purpose))</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+        # Untagged resources detail list
+        if ($d.Tags.UntaggedResources -and $d.Tags.UntaggedResources.Count -gt 0) {
+            $utShown = $d.Tags.UntaggedResources.Count
+            $utTotal = $d.Tags.UntaggedCount
+            $utNote  = if ($utShown -lt $utTotal) { " (showing $utShown of $utTotal)" } else { "" }
+            [void]$sb.Append("<h3>Untagged Resources$utNote</h3>")
+            [void]$sb.Append("<table><tr><th>Resource Name</th><th>Resource Type</th><th>Resource Group</th><th>Subscription</th><th>Location</th></tr>")
+            foreach ($ur in $d.Tags.UntaggedResources) {
+                [void]$sb.Append("<tr><td>$($esc::Escape($ur.ResourceName))</td><td>$($esc::Escape($ur.ResourceType))</td><td>$($esc::Escape($ur.ResourceGroup))</td><td>$($esc::Escape($ur.Subscription))</td><td>$($esc::Escape($ur.Location))</td></tr>")
             }
             [void]$sb.Append("</table>")
         }

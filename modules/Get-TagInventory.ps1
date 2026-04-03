@@ -55,6 +55,7 @@ resources
 
     # -- Query 2: Untagged resource count -------------------------------
     $untaggedCount = 0
+    $untaggedResources = @()
     try {
         $untaggedQuery = @"
 resources
@@ -67,6 +68,34 @@ resources
         }
     } catch {
         Write-Warning "Untagged resource count failed: $($_.Exception.Message)"
+    }
+
+    # -- Query 4: Untagged resource details (top 500) -------------------
+    try {
+        $untaggedDetailQuery = @"
+resources
+| where isnull(tags) or tags == '{}'
+| project name, type, resourceGroup, subscriptionId, location
+| order by type asc, name asc
+| take 500
+"@
+        $udResult = Search-AzGraph -Query $untaggedDetailQuery -Subscription $subIds -First 500 -ErrorAction Stop
+        if ($udResult.Data) {
+            # Map subscription IDs to names
+            $subNameMap = @{}
+            foreach ($s in $Subscriptions) { $subNameMap[$s.Id] = $s.Name }
+            $untaggedResources = @($udResult.Data | ForEach-Object {
+                [PSCustomObject]@{
+                    ResourceName   = $_.name
+                    ResourceType   = $_.type
+                    ResourceGroup  = $_.resourceGroup
+                    Subscription   = if ($subNameMap.ContainsKey($_.subscriptionId)) { $subNameMap[$_.subscriptionId] } else { $_.subscriptionId }
+                    Location       = $_.location
+                }
+            })
+        }
+    } catch {
+        Write-Warning "Untagged resource detail query failed: $($_.Exception.Message)"
     }
 
     # -- Query 3: Total resource count ----------------------------------
@@ -100,12 +129,13 @@ resources
     $tagCoverage = if ($totalCount -gt 0) { [math]::Round(($taggedCount / $totalCount) * 100, 1) } else { 0 }
 
     return [PSCustomObject]@{
-        TagNames       = $tagNames
-        TagCount       = $tagNames.Count
-        TotalResources = $totalCount
-        TaggedCount    = $taggedCount
-        UntaggedCount  = $untaggedCount
-        TagCoverage    = $tagCoverage
-        RawResults     = $allResults
+        TagNames           = $tagNames
+        TagCount           = $tagNames.Count
+        TotalResources     = $totalCount
+        TaggedCount        = $taggedCount
+        UntaggedCount      = $untaggedCount
+        TagCoverage        = $tagCoverage
+        UntaggedResources  = $untaggedResources
+        RawResults         = $allResults
     }
 }
