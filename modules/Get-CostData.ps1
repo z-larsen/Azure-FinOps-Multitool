@@ -166,7 +166,7 @@ function Get-CostDataPerSubscription {
             } | ConvertTo-Json -Depth 10
 
             $path = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement"
-            $resp = Invoke-AzRestMethod -Path "$path/query?api-version=2023-11-01" -Method POST -Payload $body -ErrorAction Stop
+            $resp = Invoke-AzRestMethodWithRetry -Path "$path/query?api-version=2023-11-01" -Method POST -Payload $body
 
             $actual = 0; $currency = 'USD'
             if ($resp.StatusCode -eq 200) {
@@ -201,7 +201,7 @@ function Get-CostDataPerSubscription {
                         includeFreshPartialCost = $false
                     } | ConvertTo-Json -Depth 10
 
-                    $fResp = Invoke-AzRestMethod -Path "$path/forecast?api-version=2023-11-01" -Method POST -Payload $fBody -ErrorAction Stop
+                    $fResp = Invoke-AzRestMethodWithRetry -Path "$path/forecast?api-version=2023-11-01" -Method POST -Payload $fBody
                     if ($fResp.StatusCode -eq 200) {
                         $fRes = ($fResp.Content | ConvertFrom-Json)
                         if ($fRes.properties.rows -and $fRes.properties.rows.Count -gt 0) {

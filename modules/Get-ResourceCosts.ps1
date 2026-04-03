@@ -211,7 +211,7 @@ function Get-ResourceCosts {
                 }
             } | ConvertTo-Json -Depth 10
 
-            $resp = Invoke-AzRestMethod -Path "$basePath/query?api-version=2023-11-01" -Method POST -Payload $body -ErrorAction Stop
+            $resp = Invoke-AzRestMethodWithRetry -Path "$basePath/query?api-version=2023-11-01" -Method POST -Payload $body
 
             if ($resp.StatusCode -eq 200) {
                 $result = ($resp.Content | ConvertFrom-Json)
@@ -305,7 +305,7 @@ function Get-ResourceCosts {
                     includeFreshPartialCost = $false
                 } | ConvertTo-Json -Depth 10
 
-                $fResp = Invoke-AzRestMethod -Path "$basePath/forecast?api-version=2023-11-01" -Method POST -Payload $fBody -ErrorAction Stop
+                $fResp = Invoke-AzRestMethodWithRetry -Path "$basePath/forecast?api-version=2023-11-01" -Method POST -Payload $fBody
 
                 if ($fResp.StatusCode -eq 200) {
                     $fResult = ($fResp.Content | ConvertFrom-Json)

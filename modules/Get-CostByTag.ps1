@@ -164,7 +164,7 @@ function Get-CostByTag {
                     for ($i = 0; $i -lt $sampleSize; $i++) {
                         $sub = $Subscriptions[$i]
                         $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                        $subResp = Invoke-AzRestMethod -Path $subPath -Method POST -Payload $body -ErrorAction SilentlyContinue
+                        $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
                         if ($subResp.StatusCode -eq 200) {
                             $subRows = Parse-CostRows -ResponseContent $subResp.Content
                             foreach ($r in $subRows) { [void]$tagCosts.Add($r) }
@@ -178,7 +178,7 @@ function Get-CostByTag {
                         for ($i = $sampleSize; $i -lt $Subscriptions.Count; $i++) {
                             $sub = $Subscriptions[$i]
                             $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                            $subResp = Invoke-AzRestMethod -Path $subPath -Method POST -Payload $body -ErrorAction SilentlyContinue
+                            $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
                             if ($subResp.StatusCode -eq 200) {
                                 $subRows = Parse-CostRows -ResponseContent $subResp.Content
                                 foreach ($r in $subRows) { [void]$tagCosts.Add($r) }

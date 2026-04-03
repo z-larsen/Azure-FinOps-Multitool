@@ -22,6 +22,39 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+# -- Shared Helper: Invoke-AzRestMethodWithRetry ----------------------------
+# Wraps Invoke-AzRestMethod with automatic retry on HTTP 429 (throttling).
+# Cost Management API rate-limits aggressively; per-sub queries across
+# multiple scan stages can exhaust the quota quickly.
+function Invoke-AzRestMethodWithRetry {
+    param(
+        [string]$Path,
+        [string]$Method = 'POST',
+        [string]$Payload,
+        [int]$MaxRetries = 3
+    )
+    for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
+        $params = @{ Path = $Path; Method = $Method; ErrorAction = 'Stop' }
+        if ($Payload) { $params['Payload'] = $Payload }
+        $resp = Invoke-AzRestMethod @params
+        if ($resp.StatusCode -ne 429) { return $resp }
+
+        # Parse Retry-After header or default to exponential backoff
+        $retryAfter = 10
+        if ($resp.Headers -and $resp.Headers['Retry-After']) {
+            $parsed = 0
+            if ([int]::TryParse($resp.Headers['Retry-After'], [ref]$parsed)) {
+                $retryAfter = [math]::Max($parsed, 5)
+            }
+        } else {
+            $retryAfter = [math]::Min(10 * [math]::Pow(2, $attempt), 60)
+        }
+        Write-Host "  [429 Throttled] Waiting $($retryAfter)s before retry ($($attempt+1)/$MaxRetries)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds $retryAfter
+    }
+    return $resp  # Return last 429 response if all retries exhausted
+}
+
 # -- Dot-Source Modules -------------------------------------------------
 $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Initialize-Scanner.ps1')

@@ -119,7 +119,7 @@ function Get-CostTrend {
                 }
 
                 $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                $subResp = Invoke-AzRestMethod -Path $subPath -Method POST -Payload $body -ErrorAction SilentlyContinue
+                $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
 
                 if ($subResp.StatusCode -eq 200) {
                     $subResult = ($subResp.Content | ConvertFrom-Json)

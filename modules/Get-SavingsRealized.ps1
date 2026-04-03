@@ -133,7 +133,7 @@ function Get-SavingsRealized {
             } | ConvertTo-Json -Depth 10
 
             $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-            $actualResp = Invoke-AzRestMethod -Path $subPath -Method POST -Payload $actualBody -ErrorAction SilentlyContinue
+            $actualResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $actualBody
 
             if ($actualResp.StatusCode -eq 200) {
                 $actualResult = ($actualResp.Content | ConvertFrom-Json)
@@ -171,7 +171,7 @@ function Get-SavingsRealized {
                 }
             } | ConvertTo-Json -Depth 10
 
-            $amortResp = Invoke-AzRestMethod -Path $subPath -Method POST -Payload $amortBody -ErrorAction SilentlyContinue
+            $amortResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $amortBody
             if ($amortResp.StatusCode -eq 200) {
                 $amortResult = ($amortResp.Content | ConvertFrom-Json)
                 if ($amortResult.properties.rows) {
