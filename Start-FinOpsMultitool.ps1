@@ -36,7 +36,9 @@ function Get-PlainAccessToken {
 }
 
 # -- Shared Helper: Invoke-AzRestMethodWithRetry ----------------------------
-# Wraps Invoke-AzRestMethod with automatic retry on HTTP 429 (throttling).
+# Wraps Invoke-AzRestMethod with:
+#   - Background runspace with 60s timeout (prevents indefinite hangs)
+#   - Automatic retry on HTTP 429 (throttling) with DispatcherFrame UI wait
 # Cost Management API rate-limits aggressively; per-sub queries across
 # multiple scan stages can exhaust the quota quickly.
 function Invoke-AzRestMethodWithRetry {
@@ -44,13 +46,68 @@ function Invoke-AzRestMethodWithRetry {
         [string]$Path,
         [string]$Method = 'POST',
         [string]$Payload,
-        [int]$MaxRetries = 3
+        [int]$MaxRetries = 3,
+        [int]$TimeoutSeconds = 60
     )
     for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
-        $params = @{ Path = $Path; Method = $Method; ErrorAction = 'Stop' }
-        if ($Payload) { $params['Payload'] = $Payload }
-        $resp = Invoke-AzRestMethod @params
-        if ($resp.StatusCode -ne 429) { return $resp }
+        # Run Invoke-AzRestMethod in a background runspace so it can be
+        # killed on timeout (the cmdlet has no TimeoutSec parameter).
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            param($p, $m, $pl)
+            $params = @{ Path = $p; Method = $m; ErrorAction = 'Stop' }
+            if ($pl) { $params['Payload'] = $pl }
+            $r = Invoke-AzRestMethod @params
+            # Return a simple hashtable that survives runspace serialization
+            $hdrs = @{}
+            if ($r.Headers) {
+                foreach ($k in $r.Headers.Keys) { $hdrs[$k] = $r.Headers[$k] }
+            }
+            [PSCustomObject]@{
+                StatusCode = $r.StatusCode
+                Content    = $r.Content
+                Headers    = $hdrs
+            }
+        }).AddArgument($Path).AddArgument($Method).AddArgument($Payload)
+
+        $asyncResult = $ps.BeginInvoke()
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+        # DispatcherFrame loop keeps WPF UI responsive while waiting
+        while (-not $asyncResult.IsCompleted -and (Get-Date) -lt $deadline) {
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::Background,
+                [action]{ $frame.Continue = $false }
+            )
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+            Start-Sleep -Milliseconds 100
+        }
+
+        $resp = $null
+        if ($asyncResult.IsCompleted) {
+            try {
+                $raw = $ps.EndInvoke($asyncResult)
+                $resp = if ($raw -and $raw.Count -gt 0) { $raw[0] } else { $null }
+            } catch {
+                $ps.Dispose(); $rs.Close()
+                throw
+            }
+        } else {
+            $ps.Stop()
+            Write-Warning "  REST call timed out after $($TimeoutSeconds)s: $Method $Path"
+            $ps.Dispose(); $rs.Close()
+            # Return a synthetic timeout response
+            return [PSCustomObject]@{ StatusCode = 408; Content = '{"error":{"message":"Request timed out"}}'; Headers = @{} }
+        }
+
+        $ps.Dispose()
+        $rs.Close()
+
+        if (-not $resp -or $resp.StatusCode -ne 429) { return $resp }
 
         # Parse Retry-After header or default to exponential backoff
         $retryAfter = 10
@@ -69,8 +126,7 @@ function Invoke-AzRestMethodWithRetry {
             Update-ScanStatus "Rate limited - waiting $($retryAfter)s before retry ($($attempt+1)/$MaxRetries)..."
         }
 
-        # Dispatcher-friendly wait: use DispatcherFrame to create a nested
-        # message loop that keeps the WPF UI responsive during the delay.
+        # Dispatcher-friendly wait: DispatcherFrame nested message loop
         $waitEnd = (Get-Date).AddSeconds($retryAfter)
         while ((Get-Date) -lt $waitEnd) {
             $frame = [System.Windows.Threading.DispatcherFrame]::new()

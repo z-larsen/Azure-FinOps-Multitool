@@ -21,7 +21,7 @@ function Get-BillingStructure {
     # -- Step 1: Get Billing Accounts -----------------------------------
     try {
         $baPath = "/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01"
-        $baResp = Invoke-AzRestMethod -Path $baPath -Method GET -ErrorAction Stop
+        $baResp = Invoke-AzRestMethodWithRetry -Path $baPath -Method GET
         if ($baResp.StatusCode -eq 200) {
             $baResult = ($baResp.Content | ConvertFrom-Json)
             if ($baResult.value) {
@@ -51,7 +51,7 @@ function Get-BillingStructure {
         }
         try {
             $bpPath = "$($ba.FullId)/billingProfiles?api-version=2024-04-01"
-            $bpResp = Invoke-AzRestMethod -Path $bpPath -Method GET -ErrorAction Stop
+            $bpResp = Invoke-AzRestMethodWithRetry -Path $bpPath -Method GET
             if ($bpResp.StatusCode -eq 200) {
                 $bpResult = ($bpResp.Content | ConvertFrom-Json)
                 if ($bpResult.value) {
@@ -70,7 +70,7 @@ function Get-BillingStructure {
                         # -- Step 3: Invoice Sections per Profile -------
                         try {
                             $isPath = "$($bp.id)/invoiceSections?api-version=2024-04-01"
-                            $isResp = Invoke-AzRestMethod -Path $isPath -Method GET -ErrorAction Stop
+                            $isResp = Invoke-AzRestMethodWithRetry -Path $isPath -Method GET
                             if ($isResp.StatusCode -eq 200) {
                                 $isResult = ($isResp.Content | ConvertFrom-Json)
                                 if ($isResult.value) {
@@ -105,7 +105,7 @@ function Get-BillingStructure {
         if ($ba.AgreementType -ne 'EnterpriseAgreement') { continue }
         try {
             $deptPath = "$($ba.FullId)/departments?api-version=2024-04-01"
-            $deptResp = Invoke-AzRestMethod -Path $deptPath -Method GET -ErrorAction Stop
+            $deptResp = Invoke-AzRestMethodWithRetry -Path $deptPath -Method GET
             if ($deptResp.StatusCode -eq 200) {
                 $deptResult = ($deptResp.Content | ConvertFrom-Json)
                 if ($deptResult.value) {
@@ -130,7 +130,7 @@ function Get-BillingStructure {
     foreach ($ba in $billingAccounts) {
         try {
             $carPath = "$($ba.FullId)/providers/Microsoft.CostManagement/costAllocationRules?api-version=2023-11-01"
-            $carResp = Invoke-AzRestMethod -Path $carPath -Method GET -ErrorAction Stop
+            $carResp = Invoke-AzRestMethodWithRetry -Path $carPath -Method GET
             if ($carResp.StatusCode -eq 200) {
                 $carResult = ($carResp.Content | ConvertFrom-Json)
                 if ($carResult.value) {

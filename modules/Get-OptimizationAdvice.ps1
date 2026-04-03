@@ -100,7 +100,7 @@ advisorresources
         foreach ($sub in $Subscriptions) {
             try {
                 $advPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Advisor/recommendations?api-version=2023-01-01&`$filter=Category eq 'Cost'"
-                $advResp = Invoke-AzRestMethod -Path $advPath -Method GET -ErrorAction Stop
+                $advResp = Invoke-AzRestMethodWithRetry -Path $advPath -Method GET
                 if ($advResp.StatusCode -ne 200) { continue }
                 $advResult = ($advResp.Content | ConvertFrom-Json)
 

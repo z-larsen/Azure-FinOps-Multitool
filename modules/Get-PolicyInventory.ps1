@@ -189,7 +189,7 @@ policyresources
             }
             try {
                 $compPath = "/subscriptions/$($sub.Id)/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01"
-                $compResp = Invoke-AzRestMethod -Path $compPath -Method POST -ErrorAction Stop
+                $compResp = Invoke-AzRestMethodWithRetry -Path $compPath -Method POST
                 if ($compResp.StatusCode -eq 200) {
                     $summary = ($compResp.Content | ConvertFrom-Json).value
                     if ($summary -and $summary.Count -gt 0) {
@@ -223,7 +223,7 @@ policyresources
             }
             try {
                 $assignPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Authorization/policyAssignments?api-version=2022-06-01"
-                $resp = Invoke-AzRestMethod -Path $assignPath -Method GET -ErrorAction Stop
+                $resp = Invoke-AzRestMethodWithRetry -Path $assignPath -Method GET
                 if ($resp.StatusCode -eq 200) {
                     $assignments = ($resp.Content | ConvertFrom-Json).value
                     foreach ($a in $assignments) {

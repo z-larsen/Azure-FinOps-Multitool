@@ -35,11 +35,7 @@ function Get-BudgetStatus {
         foreach ($sub in $sampleSubs) {
             try {
                 $budgetPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets?api-version=2023-05-01"
-                $resp = Invoke-AzRestMethod -Path $budgetPath -Method GET -ErrorAction SilentlyContinue
-                if ($resp.StatusCode -eq 200) {
-                    $data = ($resp.Content | ConvertFrom-Json)
-                    if ($data.value -and $data.value.Count -gt 0) { $sampleHits++ }
-                }
+                $resp = Invoke-AzRestMethodWithRetry -Path $budgetPath -Method GET
             } catch { }
         }
 
@@ -63,7 +59,7 @@ function Get-BudgetStatus {
         }
         try {
             $budgetPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets?api-version=2023-05-01"
-            $resp = Invoke-AzRestMethod -Path $budgetPath -Method GET -ErrorAction SilentlyContinue
+            $resp = Invoke-AzRestMethodWithRetry -Path $budgetPath -Method GET
 
             if ($resp.StatusCode -eq 200) {
                 $data = ($resp.Content | ConvertFrom-Json)

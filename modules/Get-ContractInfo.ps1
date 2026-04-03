@@ -34,7 +34,7 @@ function Get-ContractInfo {
     foreach ($sub in $subsToCheck) {
         try {
             $subPath = "/subscriptions/$($sub.Id)?api-version=2022-12-01"
-            $subResp = Invoke-AzRestMethod -Path $subPath -Method GET -ErrorAction SilentlyContinue
+            $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method GET
             if ($subResp.StatusCode -eq 200) {
                 $subDetail = ($subResp.Content | ConvertFrom-Json)
                 $quotaId = $subDetail.properties.subscriptionPolicies.quotaId
@@ -65,7 +65,7 @@ function Get-ContractInfo {
 
     # -- Step 2: Try billing accounts API, filtered by inferred type -----
     try {
-        $response = Invoke-AzRestMethod -Path "/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01" -Method GET -ErrorAction Stop
+        $response = Invoke-AzRestMethodWithRetry -Path "/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01" -Method GET
         $result = ($response.Content | ConvertFrom-Json)
 
         if ($result.value -and $result.value.Count -gt 0) {

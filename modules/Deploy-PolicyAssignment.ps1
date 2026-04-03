@@ -53,7 +53,7 @@ function Deploy-PolicyAssignment {
     $validParamNames = @()
     try {
         $defPath = "$($PolicyDefinitionId)?api-version=2021-06-01"
-        $defResp = Invoke-AzRestMethod -Path $defPath -Method GET -ErrorAction SilentlyContinue
+        $defResp = Invoke-AzRestMethodWithRetry -Path $defPath -Method GET
         if ($defResp.StatusCode -eq 200) {
             $defObj = $defResp.Content | ConvertFrom-Json -ErrorAction SilentlyContinue
             if ($defObj.properties.parameters) {
@@ -92,7 +92,7 @@ function Deploy-PolicyAssignment {
     $assignPath = "$Scope/providers/Microsoft.Authorization/policyAssignments/$($assignName)?api-version=2022-06-01"
 
     try {
-        $response = Invoke-AzRestMethod -Path $assignPath -Method PUT -Payload $body -ErrorAction Stop
+        $response = Invoke-AzRestMethodWithRetry -Path $assignPath -Method PUT -Payload $body
         if ($response.StatusCode -in @(200, 201)) {
             Write-Host "    Policy assignment created successfully." -ForegroundColor Green
             return [PSCustomObject]@{
@@ -144,7 +144,7 @@ function Get-PolicyScopes {
 
         try {
             $rgPath = "/subscriptions/$($sub.Id)/resourcegroups?api-version=2021-04-01"
-            $resp = Invoke-AzRestMethod -Path $rgPath -Method GET -ErrorAction SilentlyContinue
+            $resp = Invoke-AzRestMethodWithRetry -Path $rgPath -Method GET
             if ($resp.StatusCode -eq 200) {
                 $rgs = ($resp.Content | ConvertFrom-Json).value
                 foreach ($rg in $rgs) {

@@ -126,7 +126,7 @@ function Get-ResourceCosts {
                     }
                     if ($page.properties.nextLink) {
                         $nextUri = [System.Uri]$page.properties.nextLink
-                        $nResp = Invoke-AzRestMethod -Path $nextUri.PathAndQuery -Method GET -ErrorAction Stop
+                        $nResp = Invoke-AzRestMethodWithRetry -Path $nextUri.PathAndQuery -Method GET
                         if ($nResp.StatusCode -eq 200) { $page = ($nResp.Content | ConvertFrom-Json) }
                         else { break }
                     } else { break }
@@ -254,7 +254,7 @@ function Get-ResourceCosts {
                     # Follow pagination link if present
                     if ($page.properties.nextLink) {
                         $uri = [System.Uri]$page.properties.nextLink
-                        $nResp = Invoke-AzRestMethod -Path $uri.PathAndQuery -Method GET -ErrorAction Stop
+                        $nResp = Invoke-AzRestMethodWithRetry -Path $uri.PathAndQuery -Method GET
                         if ($nResp.StatusCode -eq 200) { $page = ($nResp.Content | ConvertFrom-Json) }
                         else { break }
                     } else { break }

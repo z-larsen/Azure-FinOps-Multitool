@@ -31,7 +31,7 @@ reservationrecommendations
         # Try cross-subscription query for reservation details
         foreach ($sub in $Subscriptions | Select-Object -First 5) {
             $summaryPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/reservationSummaries?grain=monthly&api-version=2023-05-01&`$filter=properties/usageDate ge '$(((Get-Date).AddDays(-30)).ToString('yyyy-MM-dd'))'"
-            $resp = Invoke-AzRestMethod -Path $summaryPath -Method GET -ErrorAction SilentlyContinue
+            $resp = Invoke-AzRestMethodWithRetry -Path $summaryPath -Method GET
             if ($resp.StatusCode -eq 200) {
                 $data = ($resp.Content | ConvertFrom-Json)
                 if ($data.value) {
@@ -62,7 +62,7 @@ reservationrecommendations
     if ($reservations.Count -eq 0) {
         try {
             $roPath = "/providers/Microsoft.Capacity/reservationOrders?api-version=2022-11-01"
-            $resp = Invoke-AzRestMethod -Path $roPath -Method GET -ErrorAction Stop
+            $resp = Invoke-AzRestMethodWithRetry -Path $roPath -Method GET
             if ($resp.StatusCode -eq 200) {
                 $data = ($resp.Content | ConvertFrom-Json)
                 if ($data.value) {
@@ -73,7 +73,7 @@ reservationrecommendations
                                 # Get utilization summary for each reservation
                                 try {
                                     $utilPath = "$($ri.id)/providers/Microsoft.Consumption/reservationSummaries?grain=monthly&api-version=2023-05-01&`$filter=properties/usageDate ge '$(((Get-Date).AddDays(-30)).ToString('yyyy-MM-dd'))'"
-                                    $utilResp = Invoke-AzRestMethod -Path $utilPath -Method GET -ErrorAction SilentlyContinue
+                                    $utilResp = Invoke-AzRestMethodWithRetry -Path $utilPath -Method GET
                                     if ($utilResp.StatusCode -eq 200) {
                                         $utilData = ($utilResp.Content | ConvertFrom-Json)
                                         if ($utilData.value -and $utilData.value.Count -gt 0) {
@@ -108,7 +108,7 @@ reservationrecommendations
     try {
         foreach ($sub in $Subscriptions | Select-Object -First 5) {
             $spPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/benefitUtilizationSummaries?api-version=2023-11-01&filter=properties/usageDate ge '$(((Get-Date).AddDays(-30)).ToString('yyyy-MM-dd'))'&grain=Monthly"
-            $spResp = Invoke-AzRestMethod -Path $spPath -Method GET -ErrorAction SilentlyContinue
+            $spResp = Invoke-AzRestMethodWithRetry -Path $spPath -Method GET
             if ($spResp.StatusCode -eq 200) {
                 $spData = ($spResp.Content | ConvertFrom-Json)
                 if ($spData.value) {
