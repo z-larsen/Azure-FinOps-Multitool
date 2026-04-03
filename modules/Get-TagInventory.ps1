@@ -119,12 +119,51 @@ resources
         $tagNames[$name].TotalResources += $row.ResourceCount
     }
 
+    # -- Query 5: Tag locations (which subscriptions + RGs each tag is on)
+    $tagLocations = @{}
+    try {
+        $subNameMap = @{}
+        foreach ($s in $Subscriptions) { $subNameMap[$s.Id] = $s.Name }
+
+        $locQuery = @"
+resources
+| mvexpand tags
+| extend tagName = tostring(bag_keys(tags)[0])
+| where isnotempty(tagName)
+| summarize ResourceCount = count() by tagName, subscriptionId, resourceGroup
+| order by tagName asc, ResourceCount desc
+"@
+        $locResults = @()
+        $locSkip = $null
+        do {
+            $locResult = Search-AzGraphSafe -Query $locQuery -Subscription $subIds -First 1000 -SkipToken $locSkip
+            if (-not $locResult) { break }
+            $locResults += $locResult.Data
+            $locSkip = $locResult.SkipToken
+        } while ($locSkip)
+
+        foreach ($row in $locResults) {
+            $name = $row.tagName
+            if (-not $tagLocations.ContainsKey($name)) {
+                $tagLocations[$name] = [System.Collections.Generic.List[string]]::new()
+            }
+            $subName = if ($subNameMap.ContainsKey($row.subscriptionId)) { $subNameMap[$row.subscriptionId] } else { $row.subscriptionId }
+            $loc = "$subName / $($row.resourceGroup)"
+            if ($loc -notin $tagLocations[$name]) {
+                [void]$tagLocations[$name].Add($loc)
+            }
+        }
+    } catch {
+        Write-Warning "Tag location query failed: $($_.Exception.Message)"
+    }
+
     $taggedCount = $totalCount - $untaggedCount
     $tagCoverage = if ($totalCount -gt 0) { [math]::Round(($taggedCount / $totalCount) * 100, 1) } else { 0 }
 
     return [PSCustomObject]@{
         TagNames           = $tagNames
         TagCount           = $tagNames.Count
+        TagLocations       = $tagLocations
         TotalResources     = $totalCount
         TaggedCount        = $taggedCount
         UntaggedCount      = $untaggedCount

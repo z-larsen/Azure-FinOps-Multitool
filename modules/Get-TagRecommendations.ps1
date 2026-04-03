@@ -14,7 +14,9 @@ function Get-TagRecommendations {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [hashtable]$ExistingTags   # Keys = tag names currently in use
+        [hashtable]$ExistingTags,   # Keys = tag names currently in use
+
+        [hashtable]$TagLocations = @{}  # Keys = tag names, Values = list of "Sub / RG" strings
     )
 
     # Microsoft Cloud Adoption Framework recommended tags
@@ -133,12 +135,31 @@ function Get-TagRecommendations {
                   elseif ($foundVariation) { "Variation found: $foundVariation" }
                   else { 'Missing' }
 
+        # Build location string from TagLocations
+        $matchedName = if ($found) { $rec.TagName }
+                       elseif ($foundVariation) { $foundVariation }
+                       else { $null }
+        $locationStr = ''
+        if ($matchedName) {
+            # Case-insensitive lookup in TagLocations hashtable
+            $locKey = $TagLocations.Keys | Where-Object { $_.ToLower() -eq $matchedName.ToLower() } | Select-Object -First 1
+            if ($locKey -and $TagLocations[$locKey]) {
+                $locs = @($TagLocations[$locKey])
+                if ($locs.Count -le 3) {
+                    $locationStr = $locs -join '; '
+                } else {
+                    $locationStr = ($locs[0..2] -join '; ') + " (+$($locs.Count - 3) more)"
+                }
+            }
+        }
+
         [PSCustomObject]@{
             TagName   = $rec.TagName
             Status    = $status
             Priority  = $rec.Priority
             Pillar    = $rec.Pillar
             Purpose   = $rec.Purpose
+            Location  = $locationStr
             Example   = $rec.Example
             Reference = $rec.Reference
         }

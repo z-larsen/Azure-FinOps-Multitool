@@ -576,6 +576,7 @@ function Populate-TagsTab {
             [PSCustomObject]@{
                 'Tag'       = $_.TagName
                 'Status'    = $_.Status
+                'Location'  = $_.Location
                 'Priority'  = $_.Priority
                 'Pillar'    = $_.Pillar
                 'Purpose'   = $_.Purpose
@@ -2478,10 +2479,11 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
         # CAF recommended tags
         if ($d.TagRecs) {
             [void]$sb.Append("<h3>Microsoft CAF Recommended Tags</h3>")
-            [void]$sb.Append("<table><tr><th>Tag Name</th><th>Status</th><th>Purpose</th></tr>")
+            [void]$sb.Append("<table><tr><th>Tag Name</th><th>Status</th><th>Location</th><th>Purpose</th></tr>")
             foreach ($tr in $d.TagRecs.Analysis) {
                 $statusCls = if ($tr.Status -eq 'Present') { 'status-assigned' } else { 'status-missing' }
-                [void]$sb.Append("<tr><td><strong>$($esc::Escape($tr.TagName))</strong></td><td class=`"$statusCls`">$($tr.Status)</td><td>$($esc::Escape($tr.Purpose))</td></tr>")
+                $locText = if ($tr.Location) { $esc::Escape($tr.Location) } else { '-' }
+                [void]$sb.Append("<tr><td><strong>$($esc::Escape($tr.TagName))</strong></td><td class=`"$statusCls`">$($tr.Status)</td><td>$locText</td><td>$($esc::Escape($tr.Purpose))</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
@@ -2677,7 +2679,8 @@ $script:scanStages = @(
     }}
     @{ Label = 'Analyzing tag compliance...';          Pct = 88;  Action = {
         $tagNames = if ($script:scanData.Tags) { $script:scanData.Tags.TagNames } else { @{} }
-        $script:scanData.TagRecs = Get-TagRecommendations -ExistingTags $tagNames
+        $tagLocs  = if ($script:scanData.Tags) { $script:scanData.Tags.TagLocations } else { @{} }
+        $script:scanData.TagRecs = Get-TagRecommendations -ExistingTags $tagNames -TagLocations $tagLocs
     }}
     @{ Label = 'Scanning policy assignments...';       Pct = 89;  Action = {
         $script:scanData.PolicyInv = Get-PolicyInventory -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
