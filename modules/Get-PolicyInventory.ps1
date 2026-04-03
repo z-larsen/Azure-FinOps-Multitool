@@ -87,38 +87,40 @@ policyresources
         Write-Warning "  Resource Graph policy query failed: $($_.Exception.Message)"
     }
 
-    # -- Strategy 2: MG-scope for compliance summary (1 call) ----------
-    if ($TenantId) {
-        try {
-            Write-Host "  Querying policy compliance (MG scope)..." -ForegroundColor Cyan
-            $compPath = "/providers/Microsoft.Management/managementGroups/$TenantId/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01"
-            $compResp = Invoke-AzRestMethod -Path $compPath -Method POST -ErrorAction Stop
-            if ($compResp.StatusCode -eq 200) {
-                $summary = ($compResp.Content | ConvertFrom-Json).value
-                if ($summary -and $summary.Count -gt 0) {
-                    # MG-scope returns per-subscription breakdowns within the summary
-                    $topSummary = $summary[0]
-                    if ($topSummary.policyAssignments) {
-                        # Extract compliance from subscription-level details if available
-                        foreach ($sub in $Subscriptions) {
-                            $subDetails = $topSummary.policyAssignments | ForEach-Object {
-                                $_.results
-                            }
+    # -- Strategy 2: Per-sub compliance summary --------------------------
+    # (MG-scope summarize API can hang indefinitely; skip it and go direct)
+    {
+        $compSubs = if ($subCount -gt 50) {
+            Write-Host "  Sampling compliance from 10 of $subCount subs..." -ForegroundColor Yellow
+            $Subscriptions | Select-Object -First 10
+        } else { $Subscriptions }
+
+        Write-Host "  Querying policy compliance ($($compSubs.Count) subscriptions)..." -ForegroundColor Cyan
+        $i = 0
+        foreach ($sub in $compSubs) {
+            $i++
+            try {
+                $compPath = "/subscriptions/$($sub.Id)/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01"
+                $compResp = Invoke-AzRestMethod -Path $compPath -Method POST -ErrorAction Stop
+                if ($compResp.StatusCode -eq 200) {
+                    $summary = ($compResp.Content | ConvertFrom-Json).value
+                    if ($summary -and $summary.Count -gt 0) {
+                        $s = $summary[0].results
+                        $complianceMap[$sub.Id] = [PSCustomObject]@{
+                            Subscription     = $sub.Name
+                            SubscriptionId   = $sub.Id
+                            TotalResources   = $s.resourceDetails | ForEach-Object { $_.count } | Measure-Object -Sum | Select-Object -ExpandProperty Sum
+                            NonCompliant     = ($s.resourceDetails | Where-Object { $_.complianceState -eq 'noncompliant' }).count
+                            Compliant        = ($s.resourceDetails | Where-Object { $_.complianceState -eq 'compliant' }).count
+                            PolicyCount      = $s.policyDetails | ForEach-Object { $_.count } | Measure-Object -Sum | Select-Object -ExpandProperty Sum
                         }
                     }
-                    # Use the top-level results for overall compliance
-                    $s = $topSummary.results
-                    if ($s -and $s.resourceDetails) {
-                        $totalCompliantMg = ($s.resourceDetails | Where-Object { $_.complianceState -eq 'compliant' }).count
-                        $totalNonCompliantMg = ($s.resourceDetails | Where-Object { $_.complianceState -eq 'noncompliant' }).count
-                        $gotCompliance = $true
-                        Write-Host "  MG-scope compliance: $totalCompliantMg compliant, $totalNonCompliantMg non-compliant" -ForegroundColor Green
-                    }
                 }
+            } catch {
+                Write-Warning "  Policy compliance failed for $($sub.Name): $($_.Exception.Message)"
             }
-        } catch {
-            Write-Warning "  MG-scope compliance query failed: $($_.Exception.Message)"
         }
+        if ($complianceMap.Count -gt 0) { $gotCompliance = $true }
     }
 
     # -- Strategy 3: Per-sub fallback (only if Resource Graph failed) ---
@@ -162,45 +164,6 @@ policyresources
         }
     }
 
-    # -- Per-sub compliance fallback (only if MG-scope failed) ----------
-    if (-not $gotCompliance) {
-        # For large tenants, sample compliance instead of querying all subs
-        $compSubs = if ($subCount -gt 50) {
-            Write-Host "  Sampling compliance from 10 of $subCount subs..." -ForegroundColor Yellow
-            $Subscriptions | Select-Object -First 10
-        } else { $Subscriptions }
-
-        $i = 0
-        foreach ($sub in $compSubs) {
-            $i++
-            if ($compSubs.Count -gt 20 -and ($i % 10 -eq 0)) {
-                if (Get-Command Update-ScanStatus -ErrorAction SilentlyContinue) {
-                    Update-ScanStatus "Scanning policy compliance ($i/$($compSubs.Count))..."
-                }
-            }
-            try {
-                $compPath = "/subscriptions/$($sub.Id)/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01"
-                $compResp = Invoke-AzRestMethod -Path $compPath -Method POST -ErrorAction Stop
-                if ($compResp.StatusCode -eq 200) {
-                    $summary = ($compResp.Content | ConvertFrom-Json).value
-                    if ($summary -and $summary.Count -gt 0) {
-                        $s = $summary[0].results
-                        $complianceMap[$sub.Id] = [PSCustomObject]@{
-                            Subscription     = $sub.Name
-                            SubscriptionId   = $sub.Id
-                            TotalResources   = $s.resourceDetails | ForEach-Object { $_.count } | Measure-Object -Sum | Select-Object -ExpandProperty Sum
-                            NonCompliant     = ($s.resourceDetails | Where-Object { $_.complianceState -eq 'noncompliant' }).count
-                            Compliant        = ($s.resourceDetails | Where-Object { $_.complianceState -eq 'compliant' }).count
-                            PolicyCount      = $s.policyDetails | ForEach-Object { $_.count } | Measure-Object -Sum | Select-Object -ExpandProperty Sum
-                        }
-                    }
-                }
-            } catch {
-                Write-Warning "  Policy compliance failed for $($sub.Name): $($_.Exception.Message)"
-            }
-        }
-    }
-
     # -- Deduplicate assignments by name + scope -----------------------
     $seen = @{}
     $unique = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -215,15 +178,9 @@ policyresources
     # -- Compliance totals ---------------------------------------------
     $totalCompliant    = 0
     $totalNonCompliant = 0
-    if ($gotCompliance) {
-        # Use MG-scope totals
-        $totalCompliant    = $totalCompliantMg
-        $totalNonCompliant = $totalNonCompliantMg
-    } else {
-        foreach ($c in $complianceMap.Values) {
-            $totalCompliant    += $c.Compliant
-            $totalNonCompliant += $c.NonCompliant
-        }
+    foreach ($c in $complianceMap.Values) {
+        $totalCompliant    += $c.Compliant
+        $totalNonCompliant += $c.NonCompliant
     }
     $totalEvaluated = $totalCompliant + $totalNonCompliant
     $compliancePct  = if ($totalEvaluated -gt 0) { [math]::Round(($totalCompliant / $totalEvaluated) * 100, 1) } else { 0 }
