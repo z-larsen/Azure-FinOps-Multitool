@@ -37,6 +37,18 @@ The FinOps Multitool is a lightweight, read‑only scanner designed to complemen
 
 ---
 
+## Why This Exists
+
+Most Azure customers know they have a FinOps problem. They don't know where to start.
+
+The standard path — deploy FinOps Hubs, configure FOCUS exports, build Power BI reports — is powerful, but it assumes time, Power BI expertise, and organizational buy-in that most teams don't have on day one. The result: customers stall before they get their first win.
+
+The Azure FinOps Multitool was built to solve the **cold start problem**. Run one script, get a complete picture of where your tenant stands: what things cost, what's untagged, what's orphaned, what policies are missing, and what your next three moves should be. No infrastructure to deploy. No dashboards to build. Just answers.
+
+It's designed as the on-ramp — the tool that earns the first conversation, surfaces the first wins, and gives customers the foundation they need to grow into the full FinOps Toolkit and Cost Management capabilities Microsoft provides.
+
+---
+
 ## What It Does
 
 | Area                | Data Source                       | What You See                                              |
@@ -306,16 +318,42 @@ Tested with tenants from 1 subscription to 300+. Key scalability features:
 
 ---
 
-## Future Enhancements
+## Roadmap
 
-- [ ] C# / WPF conversion (full MVVM, async data loading)
-- [x] ~~Budget vs. actual comparison per subscription~~ — Implemented: Budget Status module with risk levels
-- [x] ~~Cost trend chart (last 6 months)~~ — Implemented: WPF Canvas bar chart with per-subscription filter
-- [x] ~~Anomaly detection (spike alerts)~~ — Implemented: 25%+ MoM cost change flagging per subscription
-- [x] ~~Azure Policy compliance overlay~~ — Implemented: Policy tab with inventory, compliance %, 15 FinOps policy recs, deploy from GUI
-- [ ] Implement custom tags
+The current tool covers FinOps discovery and remediation — the first two capabilities in a larger vision.
+
+The longer-term direction is an **agentic FinOps layer**: a set of autonomous agents that don't just surface findings but act on them continuously. Discovery, anomaly detection, remediation, optimization recommendations, and reporting — orchestrated as a team rather than a one-time scan.
+
+The Azure FinOps Multitool is the foundation that makes that possible: a proven, field-tested data layer with direct write-back to Azure. The agent orchestration layer comes next.
+
+### Near-term
+
+- [ ] Custom tag deployment (user-defined tags, not just CAF recommendations)
 - [ ] PDF export with charts
-- [ ] Scheduled scan mode (run headless, email report)
+- [ ] Scheduled/headless scan mode with email report delivery
+
+### Longer-term
+
+- [ ] C# / WPF conversion (full async, MVVM architecture)
+- [ ] Agentic orchestration layer (anomaly agent, optimization agent, reporting agent)
+- [ ] Power BI integration — auto-generate a starter report from scan data
+
+### Completed
+
+- [x] ~~Budget vs. actual comparison per subscription~~ — Budget Status module with risk levels
+- [x] ~~Cost trend chart (last 6 months)~~ — WPF Canvas bar chart with per-subscription filter
+- [x] ~~Anomaly detection (spike alerts)~~ — 25%+ MoM cost change flagging per subscription
+- [x] ~~Azure Policy compliance overlay~~ — Policy tab with inventory, compliance %, 15 FinOps policy recs, deploy from GUI
+
+---
+
+## Author
+
+Built by **Zac Larsen**, Cloud Solution Architect @ Microsoft.
+
+Developed from real-world FinOps customer engagements to solve the gap between "we know we need FinOps" and "we have actionable visibility today." Designed as a complement to the Azure FinOps Toolkit, not a replacement for it.
+
+Questions, feedback, and contributions welcome.
 
 ---
 
