@@ -36,6 +36,10 @@ function Get-BudgetStatus {
             try {
                 $budgetPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets?api-version=2023-05-01"
                 $resp = Invoke-AzRestMethodWithRetry -Path $budgetPath -Method GET
+                if ($resp.StatusCode -eq 200) {
+                    $budgets = ($resp.Content | ConvertFrom-Json).value
+                    if ($budgets -and $budgets.Count -gt 0) { $sampleHits++ }
+                }
             } catch { }
         }
 

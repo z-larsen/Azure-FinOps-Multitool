@@ -1,6 +1,5 @@
 ﻿###########################################################################
-# START-FINOPSMULTITOOL.PS1
-# AZURE FINOPS MULTITOOL - Main Entry Point
+# FINOPSMULTITOOL
 ###########################################################################
 # Purpose: Launch the AZURE FINOPS MULTITOOL WPF application. Authenticates
 #          to Azure, scans the tenant for cost/tag/optimization data, and
@@ -531,13 +530,17 @@ function Populate-OverviewTab {
     }
     $script:SubCostGrid.ItemsSource = @($subRows | Sort-Object { [double]($_.'Actual (MTD)') } -Descending)
 
-    # Resource cost grid
+    # Resource cost grid — dynamic threshold: include resources >= 0.1% of total forecast
     if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) {
         $totalActualAll = ($d.ResourceCosts | Measure-Object -Property Actual -Sum).Sum
         $sorted = @($d.ResourceCosts | Sort-Object { $_.Actual } -Descending)
         $totalResources = $sorted.Count
-        $displayMax = 200
-        $display = if ($totalResources -gt $displayMax) { $sorted | Select-Object -First $displayMax } else { $sorted }
+
+        # Dynamic spend threshold: 0.1% of total actual spend (minimum $1 to filter noise)
+        $threshold = [math]::Max(1.0, $totalActualAll * 0.001)
+        $display = @($sorted | Where-Object { $_.Actual -ge $threshold })
+        # Safety: if threshold filters everything, show top 50
+        if ($display.Count -eq 0) { $display = @($sorted | Select-Object -First 50) }
 
         $resRows = [System.Collections.Generic.List[PSCustomObject]]::new()
         foreach ($r in $display) {
@@ -554,8 +557,9 @@ function Populate-OverviewTab {
         }
         $script:ResourceCostGrid.ItemsSource = @($resRows)
 
-        if ($totalResources -gt $displayMax) {
-            $script:ResourceCountNote.Text = "Showing top $displayMax of $totalResources resources by spend"
+        $excluded = $totalResources - $display.Count
+        if ($excluded -gt 0) {
+            $script:ResourceCountNote.Text = "$($display.Count) of $totalResources resources shown (threshold: $(Get-CurrencySymbol $currency)$($threshold.ToString('N2'))/mo MTD, $excluded below threshold)"
         } else {
             $script:ResourceCountNote.Text = "$totalResources resources"
         }
@@ -988,18 +992,29 @@ function Populate-GuidanceTab {
     $score += $breakdown['Visibility']
 
     # --- Allocation (20 pts) -------------------------------------------
+    # Weighted per-tag scoring: CostCenter/BusinessUnit matter most for chargeback
     $allocScore = 0
-    # Tag compliance (CAF recommended): 0-8 pts
-    if ($d.TagRecs) {
-        $allocScore += [math]::Min([math]::Floor($d.TagRecs.CompliancePercent / 12.5), 8)
+    # Weighted tag presence: 0-12 pts
+    if ($d.Tags -and $d.Tags.TagNames) {
+        $lcKeys = $d.Tags.TagNames.Keys | ForEach-Object { $_.ToLower() }
+        $tagWeights = @{
+            'CostCenter'          = @{ Weight = 3; Alts = @('costcenter', 'cost-center', 'cost_center', 'cc') }
+            'BusinessUnit'        = @{ Weight = 3; Alts = @('businessunit', 'bu', 'business-unit', 'department', 'dept') }
+            'ApplicationName'     = @{ Weight = 2; Alts = @('applicationname', 'application', 'app', 'appname') }
+            'WorkloadName'        = @{ Weight = 1; Alts = @('workloadname', 'workload', 'workload-name') }
+            'OpsTeam'             = @{ Weight = 1; Alts = @('opsteam', 'ops-team', 'ops_team', 'owner', 'technicalowner') }
+            'Criticality'         = @{ Weight = 1; Alts = @('criticality', 'sla', 'tier') }
+            'DataClassification'  = @{ Weight = 1; Alts = @('dataclassification', 'data-classification', 'classification') }
+        }
+        foreach ($tag in $tagWeights.Keys) {
+            $allNames = @($tag.ToLower()) + $tagWeights[$tag].Alts
+            if ($lcKeys | Where-Object { $_ -in $allNames }) {
+                $allocScore += $tagWeights[$tag].Weight
+            }
+        }
     }
     # Cost-by-tag data available: 4 pts
     if ($d.CostByTag -and -not $d.CostByTag.NoTagsFound -and $d.CostByTag.CostByTag.Count -gt 0) { $allocScore += 4 }
-    # Has CostCenter or BusinessUnit tag: 4 pts
-    if ($d.Tags -and $d.Tags.TagNames) {
-        $lcKeys = $d.Tags.TagNames.Keys | ForEach-Object { $_.ToLower() }
-        if ($lcKeys -contains 'costcenter' -or $lcKeys -contains 'businessunit' -or $lcKeys -contains 'department') { $allocScore += 4 }
-    }
     # Cost allocation rules configured: 4 pts
     if ($d.Billing -and $d.Billing.CostAllocationRules -and $d.Billing.CostAllocationRules.Count -gt 0) { $allocScore += 4 }
     $breakdown['Allocation'] = [math]::Min($allocScore, 20)
@@ -2807,7 +2822,7 @@ $script:scanStages = @(
         $script:scanData.Budgets = Get-BudgetStatus -Subscriptions $script:scanData.Auth.Subscriptions -CostData $script:scanData.Costs
     }}
     @{ Label = 'Calculating savings realized...';      Pct = 86;  Action = {
-        $script:scanData.Savings = Get-SavingsRealized -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
+        $script:scanData.Savings = Get-SavingsRealized -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -CommitmentData $script:scanData.Commitments
     }}
     @{ Label = 'Analyzing tag compliance...';          Pct = 88;  Action = {
         $tagNames = if ($script:scanData.Tags) { $script:scanData.Tags.TagNames } else { @{} }

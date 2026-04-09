@@ -2,7 +2,7 @@
 # GET-COSTBYTAG.PS1
 # AZURE FINOPS MULTITOOL - Cost Breakdown by Tag
 ###########################################################################
-# Purpose: For each relevant tag (CostCenter, Environment, Application,
+# Purpose: For each CAF allocation tag (CostCenter, BusinessUnit,
 #          etc.), query Cost Management to show how spend distributes
 #          across tag values. If no meaningful tags exist, fall back
 #          to cost-by-subscription so the user still sees a breakdown.
@@ -24,18 +24,18 @@ function Get-CostByTag {
         [object[]]$Subscriptions
     )
 
-    # Tags we want to break cost down by (in priority order)
-    $targetTags = @('CostCenter', 'Environment', 'Application', 'BusinessUnit', 'Project', 'Owner', 'Department')
+    # Tags we want to break cost down by (in priority order — matches CAF allocation tags)
+    $targetTags = @('CostCenter', 'BusinessUnit', 'ApplicationName', 'WorkloadName', 'OpsTeam', 'Criticality', 'DataClassification')
 
     # Also check variations
     $variations = @{
-        'CostCenter'   = @('cost-center', 'costcenter', 'cost_center', 'cc')
-        'Environment'  = @('env', 'environment', 'envtype')
-        'Application'  = @('app', 'application', 'workload', 'appname')
-        'BusinessUnit' = @('bu', 'businessunit', 'business-unit', 'department', 'dept')
-        'Project'      = @('project', 'projectname', 'initiative')
-        'Owner'        = @('owner', 'technicalowner', 'contact', 'createdby')
-        'Department'   = @('department', 'dept', 'division')
+        'CostCenter'          = @('cost-center', 'costcenter', 'cost_center', 'cc')
+        'BusinessUnit'        = @('bu', 'businessunit', 'business-unit', 'department', 'dept')
+        'ApplicationName'     = @('applicationname', 'application', 'app', 'appname', 'app-name')
+        'WorkloadName'        = @('workloadname', 'workload', 'workload-name', 'workload_name')
+        'OpsTeam'             = @('opsteam', 'ops-team', 'ops_team', 'owner', 'technicalowner')
+        'Criticality'         = @('criticality', 'sla', 'tier', 'importance')
+        'DataClassification'  = @('dataclassification', 'data-classification', 'data_classification', 'classification')
     }
 
     $existingKeys = if ($ExistingTags) { $ExistingTags.Keys | ForEach-Object { $_.ToLower() } } else { @() }

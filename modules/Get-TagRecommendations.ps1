@@ -19,95 +19,77 @@ function Get-TagRecommendations {
         [hashtable]$TagLocations = @{}  # Keys = tag names, Values = list of "Sub / RG" strings
     )
 
-    # Microsoft Cloud Adoption Framework recommended tags
-    # Organized by FinOps pillar / purpose
+    # Microsoft Cloud Adoption Framework recommended tags for FinOps allocation
+    # These 7 tags map directly to CAF categories and FinOps allocation needs
     $recommendedTags = @(
         [PSCustomObject]@{
             TagName     = 'CostCenter'
-            Purpose     = 'Financial tracking - maps resources to internal cost centers for chargeback/showback'
+            Category    = 'Accounting'
+            Purpose     = 'Financial allocation - maps resources to internal cost centers for chargeback/showback'
             Pillar      = 'Understand'
             Priority    = 'Required'
+            Weight      = 3
             Example     = 'CostCenter: CC-12345'
             Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
         }
         [PSCustomObject]@{
-            TagName     = 'Environment'
-            Purpose     = 'Deployment lifecycle stage - enables cost segmentation by dev/test/prod'
-            Pillar      = 'Understand'
-            Priority    = 'Required'
-            Example     = 'Environment: Production | Development | Staging | Test'
-            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
-        }
-        [PSCustomObject]@{
-            TagName     = 'Owner'
-            Purpose     = 'Technical owner - who to contact about this resource (accountability)'
-            Pillar      = 'Understand'
-            Priority    = 'Required'
-            Example     = 'Owner: jdoe@contoso.com'
-            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
-        }
-        [PSCustomObject]@{
-            TagName     = 'Application'
-            Purpose     = 'Application or workload name - groups resources by the app they support'
-            Pillar      = 'Understand'
-            Priority    = 'Required'
-            Example     = 'Application: HRPortal | ERP | WebFrontend'
-            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
-        }
-        [PSCustomObject]@{
             TagName     = 'BusinessUnit'
-            Purpose     = 'Top-level department - enables showback/chargeback at org level'
+            Category    = 'Ownership'
+            Purpose     = 'Org-level chargeback - enables showback/chargeback at department level'
             Pillar      = 'Understand'
-            Priority    = 'Recommended'
+            Priority    = 'Required'
+            Weight      = 3
             Example     = 'BusinessUnit: Finance | Engineering | Marketing'
             Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
         }
         [PSCustomObject]@{
-            TagName     = 'Project'
-            Purpose     = 'Project or initiative name - tracks spend against specific budgets'
-            Pillar      = 'Quantify'
-            Priority    = 'Recommended'
-            Example     = 'Project: CloudMigration-Phase2'
+            TagName     = 'ApplicationName'
+            Category    = 'Functional'
+            Purpose     = 'Product/service cost mapping - groups resources by the application they support'
+            Pillar      = 'Understand'
+            Priority    = 'Required'
+            Weight      = 2
+            Example     = 'ApplicationName: HRPortal | ERP | WebFrontend'
+            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
+        }
+        [PSCustomObject]@{
+            TagName     = 'WorkloadName'
+            Category    = 'Functional'
+            Purpose     = 'Workload attribution - identifies the workload a resource belongs to'
+            Pillar      = 'Understand'
+            Priority    = 'Required'
+            Weight      = 1
+            Example     = 'WorkloadName: PaymentProcessing | DataPipeline'
+            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
+        }
+        [PSCustomObject]@{
+            TagName     = 'OpsTeam'
+            Category    = 'Ownership'
+            Purpose     = 'Accountability for spend - which team owns and operates the resource'
+            Pillar      = 'Understand'
+            Priority    = 'Required'
+            Weight      = 1
+            Example     = 'OpsTeam: Platform-Infra | App-TeamA | SRE'
             Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
         }
         [PSCustomObject]@{
             TagName     = 'Criticality'
-            Purpose     = 'Business impact level - helps prioritize optimization (don''t rightsize critical)'
+            Category    = 'Classification'
+            Purpose     = 'Prioritization of spend - business impact level drives optimization boundaries'
             Pillar      = 'Optimize'
-            Priority    = 'Recommended'
+            Priority    = 'Required'
+            Weight      = 1
             Example     = 'Criticality: Mission-Critical | Business-Critical | Low'
             Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
         }
         [PSCustomObject]@{
             TagName     = 'DataClassification'
-            Purpose     = 'Data sensitivity level - governance and compliance visibility'
+            Category    = 'Classification'
+            Purpose     = 'Compliance-driven allocation - data sensitivity determines governance requirements'
             Pillar      = 'Understand'
-            Priority    = 'Recommended'
+            Priority    = 'Required'
+            Weight      = 1
             Example     = 'DataClassification: Confidential | Public | Internal'
-            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
-        }
-        [PSCustomObject]@{
-            TagName     = 'OperationsCommitment'
-            Purpose     = 'SLA and operations level - determines optimization boundaries'
-            Pillar      = 'Optimize'
-            Priority    = 'Optional'
-            Example     = 'OperationsCommitment: Platform | Workload | Baseline'
-            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
-        }
-        [PSCustomObject]@{
-            TagName     = 'StartDate'
-            Purpose     = 'Resource creation/go-live date - identifies orphaned or expired resources'
-            Pillar      = 'Optimize'
-            Priority    = 'Optional'
-            Example     = 'StartDate: 2026-01-15'
-            Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
-        }
-        [PSCustomObject]@{
-            TagName     = 'EndDate'
-            Purpose     = 'Planned retirement date - flag resources past their expected lifecycle'
-            Pillar      = 'Optimize'
-            Priority    = 'Optional'
-            Example     = 'EndDate: 2026-12-31'
             Reference   = 'https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging#minimum-suggested-tags'
         }
     )
@@ -120,14 +102,14 @@ function Get-TagRecommendations {
 
         # Also check common variations
         $variations = switch ($rec.TagName) {
-            'CostCenter'   { @('cost-center', 'costcenter', 'cost_center', 'cc') }
-            'Environment'  { @('env', 'environment', 'envtype') }
-            'Owner'        { @('owner', 'technicalowner', 'contact', 'createdby') }
-            'Application'  { @('app', 'application', 'workload', 'appname', 'applicationname') }
-            'BusinessUnit' { @('bu', 'businessunit', 'business-unit', 'department', 'dept') }
-            'Project'      { @('project', 'projectname', 'initiative') }
-            'Criticality'  { @('criticality', 'sla', 'tier', 'importance') }
-            default        { @() }
+            'CostCenter'          { @('cost-center', 'costcenter', 'cost_center', 'cc') }
+            'BusinessUnit'        { @('bu', 'businessunit', 'business-unit', 'department', 'dept') }
+            'ApplicationName'     { @('applicationname', 'application', 'app', 'appname', 'app-name', 'workload') }
+            'WorkloadName'        { @('workloadname', 'workload', 'workload-name', 'workload_name') }
+            'OpsTeam'             { @('opsteam', 'ops-team', 'ops_team', 'operationsteam', 'team', 'owner', 'technicalowner') }
+            'Criticality'         { @('criticality', 'sla', 'tier', 'importance') }
+            'DataClassification'  { @('dataclassification', 'data-classification', 'data_classification', 'classification') }
+            default               { @() }
         }
         $foundVariation = $existingNames | Where-Object { $_ -in $variations } | Select-Object -First 1
 

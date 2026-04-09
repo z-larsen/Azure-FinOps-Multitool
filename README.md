@@ -60,10 +60,10 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 | **Costs**           | Cost Management API (MG scope)    | Actual month-to-date + forecast per subscription           |
 | **Cost Trend**      | Cost Management API (6 months)    | Bar chart showing monthly spend over the last 6 months     |
 | **Cost Anomalies**  | Cost Trend + per-sub cost data    | Subscriptions with 25%+ month-over-month cost changes      |
-| **Resource Costs**  | Cost Management API (per sub)     | Per-resource spend with type, RG, forecast, % of total     |
+| **Resource Costs**  | Cost Management API (per sub)     | Per-resource spend with type, RG, forecast, % of total — filtered by dynamic spend threshold (0.1% of total) |
 | **Contract**        | Billing Accounts API + ARM quotaId | EA, MCA, PAYGO, or CSP detection (quotaId fallback)        |
 | **Tags**            | Azure Resource Graph              | Every tag name/value in use, untagged resource count        |
-| **Cost by Tag**     | Cost Management API               | Spend broken down by CostCenter, Environment, etc. plus auto-backfill of non-priority tags (up to 5 total); auto-fallback to last month |
+| **Cost by Tag**     | Cost Management API               | Spend broken down by CAF allocation tags (CostCenter, BusinessUnit, ApplicationName, etc.) plus auto-backfill of non-priority tags (up to 5 total); auto-fallback to last month |
 | **Tag Deploy**      | ARM Tags API (PATCH merge)        | Click missing tags to deploy them to subscriptions or RGs  |
 | **AHB**             | Azure Resource Graph              | Windows VMs, SQL VMs, and SQL DBs missing Hybrid Benefit   |
 | **Commitments**     | Reservation Summaries + Benefit Utilization API | RI and Savings Plan utilization %, underutilized commitments |
@@ -73,13 +73,13 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 | **Budget Status**   | Consumption Budgets API           | Budget vs actual per subscription, % used, risk level      |
 | **Savings Realized** | Cost Management (ActualCost + AmortizedCost) | Monthly savings from existing RIs, Savings Plans, and AHB |
 | **Scorecard**       | All of the above                  | Per-subscription health: cost, tags, optimizations, budget, trend |
-| **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against Microsoft's recommended tag strategy with deployment location |
+| **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against 7 CAF allocation tags (CostCenter, BusinessUnit, ApplicationName, WorkloadName, OpsTeam, Criticality, DataClassification) with deployment location |
 | **Policy Inventory** | ARM Policy Assignment API + Resource Graph | All effective policy and initiative assignments including MG-inherited, with compliance state |
 | **Policy Recs**     | CAF-aligned built-in policies & initiatives | Missing cost, tagging, security, and monitoring policies with deploy-from-GUI capability |
 | **Policy Deploy**   | ARM Policy Assignment API (PUT)   | Deploy recommended policies with desired effect (Audit/Deny/etc.) |
 | **Billing**         | Billing Accounts/Profiles API     | Billing accounts, profiles, invoice sections, EA depts     |
 | **Cost Allocation** | Cost Management Allocation API    | Existing cost allocation rules with source/target counts   |
-| **FinOps Guidance** | All of the above                  | Pillar-by-pillar maturity assessment with actionable advice |
+| **FinOps Guidance** | All of the above                  | FinOps Maturity Score (0-100) with weighted category breakdown and actionable advice |
 
 ---
 
@@ -204,7 +204,7 @@ a `DispatcherTimer` so the UI updates between stages.
 | 12    | Get-ReservationAdvice     | `Search-AzGraph` (advisorresources) + Reservation Recs API | ~3s |
 | 13    | Get-OptimizationAdvice    | `Search-AzGraph` (advisorresources)       | ~3s   |
 | 14    | Get-BudgetStatus          | REST: Consumption Budgets API (per sub)   | ~3s   |
-| 15    | Get-SavingsRealized       | REST: Cost Management (ActualCost + AmortizedCost) + ARG | ~5s |
+| 15    | Get-SavingsRealized       | REST: Cost Management (ActualCost + AmortizedCost) + ARG; skipped if no commitments detected in stage 10 | ~5s |
 | 16    | Get-TagRecommendations    | Local comparison + tag location map       | <1s   |
 | 17    | Get-PolicyInventory       | ARM REST API (all effective) + Resource Graph compliance | ~3s |
 | 18    | Get-PolicyRecommendations | Local comparison (no API call)            | <1s   |
@@ -239,7 +239,7 @@ a `DispatcherTimer` so the UI updates between stages.
 | API pagination (nextLink) | Cost Management caps results at ~5000 rows; pagination captures all resources |
 | List\<T\> instead of array += | O(n) vs O(n^2) — critical for tenants with 1000s of resources |
 | DataGrid virtualization | WPF only renders visible rows; prevents UI freeze on large datasets |
-| Top-200 resource grid cap | Shows highest-cost resources; avoids binding 1000s of rows to the UI |
+| Dynamic resource spend threshold | Resource grid includes all resources above 0.1% of total actual spend (min $1); avoids arbitrary caps while filtering noise |
 | DispatcherTimer staged loading | UI stays responsive between data-collection stages |
 | Modular .ps1 files | Each module testable independently; clean path to C# conversion |
 | CAF tag baseline | Comparison against Microsoft's own recommended tags, not arbitrary |
@@ -272,6 +272,9 @@ a `DispatcherTimer` so the UI updates between stages.
 | Shared resource cost map | `Build-ResourceCostMap` builds a single ARM-path-keyed lookup shared by Optimization and Orphan sections — avoids duplicate work |
 | CAF-aligned policy recommendations | Policy recs expanded to include Azure Security Benchmark v3, Secure Transfer, Diagnostic Settings, and Allowed Locations; distinguishes Policy vs Initiative assignments |
 | Non-priority tag backfill | Cost-by-tag queries the priority list first, then backfills discovered tags up to 5 total (skipping system prefixes like `hidden-`, `aks-managed-`) |
+| CAF allocation tag alignment | Tag recommendations, cost-by-tag, and maturity scoring all use the same 7 CAF tags: CostCenter, BusinessUnit, ApplicationName, WorkloadName, OpsTeam, Criticality, DataClassification |
+| Weighted tag scoring | Allocation score uses per-tag weights: CostCenter and BusinessUnit = 3 pts each, ApplicationName = 2 pts, remaining 4 tags = 1 pt each (12 pts total from tags out of 20) |
+| Commitment-aware savings skip | Stage 15 (SavingsRealized) checks commitment data from stage 10; if no RIs or Savings Plans exist, all Cost Management savings queries are skipped (saves 2-120 API calls) |
 | Cost anomaly flagging | Per-subscription MoM delta computation; flags 25%+ changes for investigation |
 | Subscription scorecard | Composite per-sub view combining cost, tags, optimizations, orphans, budget, trend |
 | Adaptive large-tenant scanning | Sample-first, cross-tag short-circuit, budget sampling, forecast skip for 50+ subs |
@@ -281,7 +284,7 @@ a `DispatcherTimer` so the UI updates between stages.
 
 ## Customization
 
-- **Add a tag to recommendations**: Edit `Get-TagRecommendations.ps1` → `$recommendedTags` array
+- **Add a tag to recommendations**: Edit `Get-TagRecommendations.ps1` → `$recommendedTags` array (update `Get-CostByTag.ps1` `$targetTags` and the Allocation scoring in `Start-FinOpsMultitool.ps1` to match)
 - **Change theme colors**: Edit `gui/MainWindow.xaml` → `Window.Resources` brushes
 - **Add a new data module**: Create `modules/Get-YourData.ps1`, dot-source in `Start-FinOpsMultitool.ps1`, add a scan stage
 
@@ -297,8 +300,9 @@ Tested with tenants from 1 subscription to 300+. Key scalability features:
   tenants with 5000+ billed resources get complete data
 - **O(n) collection building** — Uses `List<PSCustomObject>` instead of
   `$array +=` to avoid quadratic memory allocation
-- **Top-200 resource cap** — Overview grid shows the top 200 resources by
-  spend to keep the UI responsive; a note indicates total count
+- **Dynamic resource spend threshold** — Overview grid shows all resources
+  above 0.1% of total actual spend (minimum $1) to filter noise while
+  ensuring all meaningful resources are visible; a note shows the threshold
 - **DataGrid virtualization** — Row and column virtualization with recycling
   enabled so WPF only renders visible rows
 - **MG-scope-first queries** — Cost and tag queries try a single MG-scope
@@ -365,6 +369,77 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 - [x] ~~Orphaned resource cost data~~ — Per-resource Cost (MTD) and Est. Annual waste columns with total waste summary
 - [x] ~~CAF policy alignment~~ — Policy recommendations expanded to CAF-aligned policies and initiatives (Security Benchmark v3, Secure Transfer, Diagnostic Settings, Allowed Locations)
 - [x] ~~Non-priority tag backfill~~ — Cost-by-tag auto-discovers additional tags beyond the priority list (up to 5 total)
+- [x] ~~CAF allocation tag alignment~~ — Tag list, cost-by-tag, and scoring all aligned to 7 CAF allocation tags with weighted maturity scoring
+- [x] ~~Commitment-aware savings skip~~ — SavingsRealized skips Cost Management queries when no RIs/SPs exist (stage 10 data reuse)
+
+---
+
+## FinOps Maturity Score
+
+The Guidance tab calculates a 0-100 maturity score based on the FinOps Foundation Maturity Model and Microsoft Cloud Adoption Framework. The score is broken into five categories:
+
+### Visibility -- 25 pts
+
+| Points | Criteria |
+|--------|----------|
+| 0-10 | Tag coverage (% of resources tagged, scaled) |
+| 5 | Cost data retrieved from Cost Management API |
+| 5 | 6-month cost trend data available |
+| 5 | Resource-level cost breakdown available |
+
+### Allocation -- 20 pts
+
+Uses per-tag weights so the tags that matter most for chargeback/showback carry more points:
+
+| Points | Criteria |
+|--------|----------|
+| 3 | CostCenter tag present |
+| 3 | BusinessUnit tag present |
+| 2 | ApplicationName tag present |
+| 1 | WorkloadName tag present |
+| 1 | OpsTeam tag present |
+| 1 | Criticality tag present |
+| 1 | DataClassification tag present |
+| 4 | Cost-by-tag data returns results |
+| 4 | Azure Cost Allocation Rules configured |
+
+Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `application`).
+
+### Budgeting -- 15 pts
+
+| Points | Criteria |
+|--------|----------|
+| 5 | At least one budget exists |
+| 0-5 | Budget coverage across subscriptions (% scaled) |
+| 5 | No subscriptions over budget (3 if some at-risk but none over) |
+
+### Optimization -- 20 pts
+
+| Points | Criteria |
+|--------|----------|
+| 5 | RI/SP utilization >= 80% (3 if >= 60%, 2 if no commitments) |
+| 5 | Savings realized from existing commitments |
+| 0-5 | Low Advisor recommendation count (5 if zero, 3 if <= 3, 1 if <= 10) |
+| 0-5 | Low orphaned resource count (5 if zero, 3 if <= 3, 1 if <= 10) |
+
+### Governance -- 20 pts
+
+| Points | Criteria |
+|--------|----------|
+| 5 | Has Azure Policy assignments |
+| 0-5 | FinOps-recommended policies assigned (% scaled) |
+| 5 | Policy compliance >= 80% (3 if >= 50%) |
+| 5 | Management group hierarchy exists (2 if flat subs only) |
+
+### Grade Scale
+
+| Score | Grade |
+|-------|-------|
+| 85-100 | Excellent |
+| 70-84 | Good |
+| 50-69 | Developing |
+| 30-49 | Foundational |
+| 0-29 | Getting Started |
 
 ---
 

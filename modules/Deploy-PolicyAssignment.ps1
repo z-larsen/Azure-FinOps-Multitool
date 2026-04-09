@@ -30,7 +30,8 @@ function Deploy-PolicyAssignment {
     if ($Effect -notin @('Audit','Deny','Disabled','AuditIfNotExists','DeployIfNotExists','Modify','Append')) {
         throw "Invalid effect: $Effect. Must be one of: Audit, Deny, Disabled, AuditIfNotExists, DeployIfNotExists, Modify, Append"
     }
-    if ($PolicyDefinitionId -notmatch '^/providers/Microsoft\.Authorization/policyDefinitions/') {
+    $isInitiative = $PolicyDefinitionId -match '/policySetDefinitions/'
+    if ($PolicyDefinitionId -notmatch '^/providers/Microsoft\.Authorization/policy(Set)?Definitions/') {
         throw "Invalid policy definition ID format."
     }
 

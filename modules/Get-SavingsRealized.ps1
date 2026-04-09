@@ -14,7 +14,10 @@ function Get-SavingsRealized {
         [object[]]$Subscriptions,
 
         [Parameter()]
-        [string]$TenantId
+        [string]$TenantId,
+
+        [Parameter()]
+        [object]$CommitmentData
     )
 
     Write-Host "  Calculating savings already realized..." -ForegroundColor Cyan
@@ -24,10 +27,19 @@ function Get-SavingsRealized {
     $ahbSavings = 0
     $details    = [System.Collections.Generic.List[PSCustomObject]]::new()
 
+    # -- Short-circuit: skip RI/SP queries if no commitments exist -------
+    $hasCommitments = $true
+    if ($CommitmentData -and $CommitmentData.PSObject.Properties['HasData']) {
+        if (-not $CommitmentData.HasData) {
+            $hasCommitments = $false
+            Write-Host "  No reservations or savings plans detected — skipping commitment savings queries" -ForegroundColor DarkGray
+        }
+    }
+
     $gotMgData = $false
 
     # -- Strategy 1: MG-scope queries (2 API calls instead of N*2) ------
-    if ($TenantId -and (Test-MgCostScope)) {
+    if ($hasCommitments -and $TenantId -and (Test-MgCostScope)) {
         try {
             Write-Host "  Calculating savings (MG scope)..." -ForegroundColor Cyan
             $mgPath = "/providers/Microsoft.Management/managementGroups/$TenantId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
@@ -114,7 +126,7 @@ function Get-SavingsRealized {
     }
 
     # -- Strategy 2: Per-subscription fallback ---------------------------
-    if (-not $gotMgData) {
+    if ($hasCommitments -and -not $gotMgData) {
     # -- Step 1: Query amortized vs actual to find RI/SP benefit amounts --
     # The difference between ActualCost and AmortizedCost reveals commitment savings
     foreach ($sub in $Subscriptions) {
