@@ -26,7 +26,7 @@ function Get-PolicyRecommendations {
     # These are Azure built-in policy definition IDs verified from
     # https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies
     $recommendedPolicies = @(
-        # === TAGGING ===
+        # === TAGGING & NAMING (CAF: Enforce Tagging and Naming) ===
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/726aca4c-86e9-4b04-b0c5-073027359532'
             DisplayName  = 'Require a tag on resources'
@@ -75,7 +75,7 @@ function Get-PolicyRecommendations {
             DisplayName  = 'Inherit a tag from the subscription if missing'
             Category     = 'Tags'
             Pillar       = 'Understand'
-            Priority     = 'Optional'
+            Priority     = 'Recommended'
             DefaultEffect = 'Modify'
             AllowedEffects = @('Modify','Disabled')
             Purpose      = 'Auto-inherit tags from subscription to resources for top-level cost allocation'
@@ -85,21 +85,20 @@ function Get-PolicyRecommendations {
             )
         }
 
-        # === COST GOVERNANCE ===
+        # === SECURITY (CAF: Azure Security Benchmark v3) ===
         [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/cccc23c7-8427-4f53-ad12-b6a63eb452b3'
-            DisplayName  = 'Allowed virtual machine size SKUs'
-            Category     = 'Compute'
-            Pillar       = 'Optimize'
+            PolicyDefId  = '/providers/Microsoft.Authorization/policySetDefinitions/1f3afdf9-d0c9-4c3d-847f-89da613e70a8'
+            DisplayName  = 'Azure Security Benchmark (v3)'
+            Category     = 'Security'
+            Pillar       = 'Secure'
             Priority     = 'Required'
-            DefaultEffect = 'Deny'
-            AllowedEffects = @('Deny')
-            Purpose      = 'Restrict VM sizes to prevent over-provisioning and control compute costs'
-            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#compute'
-            Parameters   = @(
-                @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed VM SKUs (comma-separated, e.g. Standard_D2s_v3,Standard_B2ms)'; Required = $true; IsArray = $true }
-            )
+            DefaultEffect = 'Audit'
+            AllowedEffects = @('Audit','Disabled')
+            Purpose      = 'Comprehensive security baseline initiative - CAF recommends enabling at root management group'
+            Reference    = 'https://learn.microsoft.com/en-us/security/benchmark/azure/overview'
         }
+
+        # === ALLOWED RESOURCE LOCATIONS (CAF) ===
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c'
             DisplayName  = 'Allowed locations'
@@ -107,13 +106,60 @@ function Get-PolicyRecommendations {
             Pillar       = 'Optimize'
             Priority     = 'Required'
             DefaultEffect = 'Deny'
-            AllowedEffects = @('Deny')
-            Purpose      = 'Restrict resource deployment to approved regions to avoid unexpected inter-region transfer costs'
+            AllowedEffects = @('Audit','Deny','Disabled')
+            Purpose      = 'Restrict resource deployment to authorized Azure regions for compliance and cost control'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
             Parameters   = @(
                 @{ Name = 'listOfAllowedLocations'; Label = 'Allowed locations (comma-separated, e.g. eastus,westus2,centralus)'; Required = $true; IsArray = $true }
             )
         }
+
+        # === RESTRICT VM SIZES (CAF) ===
+        [PSCustomObject]@{
+            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/cccc23c7-8427-4f53-ad12-b6a63eb452b3'
+            DisplayName  = 'Allowed virtual machine size SKUs'
+            Category     = 'Compute'
+            Pillar       = 'Optimize'
+            Priority     = 'Required'
+            DefaultEffect = 'Deny'
+            AllowedEffects = @('Audit','Deny','Disabled')
+            Purpose      = 'Restrict VM sizes to prevent over-provisioning and control compute costs'
+            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#compute'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed VM SKUs (comma-separated, e.g. Standard_D2s_v3,Standard_B2ms)'; Required = $true; IsArray = $true }
+            )
+        }
+
+        # === REQUIRE SECURE TRANSFER FOR STORAGE (CAF) ===
+        [PSCustomObject]@{
+            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/404c3081-a854-4457-ae30-26a93ef643f9'
+            DisplayName  = 'Secure transfer to storage accounts should be enabled'
+            Category     = 'Storage'
+            Pillar       = 'Secure'
+            Priority     = 'Required'
+            DefaultEffect = 'Audit'
+            AllowedEffects = @('Audit','Deny','Disabled')
+            Purpose      = 'Ensure data encryption in transit for all storage account communications'
+            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#storage'
+        }
+
+        # === DEPLOY DIAGNOSTIC SETTINGS (CAF) ===
+        [PSCustomObject]@{
+            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/7f89b1eb-583c-429a-8828-af049802c1d9'
+            DisplayName  = 'Audit diagnostic setting'
+            Category     = 'Monitoring'
+            Pillar       = 'Understand'
+            Priority     = 'Required'
+            DefaultEffect = 'AuditIfNotExists'
+            AllowedEffects = @('AuditIfNotExists','Disabled')
+            Purpose      = 'Automatically enable logging for diagnostics - ensures visibility into resource operations and costs'
+            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#monitoring'
+            Parameters   = @(
+                @{ Name = 'listOfResourceTypes'; Label = 'Resource types to audit (comma-separated, e.g. Microsoft.Compute/virtualMachines,Microsoft.Sql/servers,Microsoft.Storage/storageAccounts)'; Required = $true; IsArray = $true }
+            )
+        }
+
+        # === ADDITIONAL FINOPS-ALIGNED ===
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/6c112d4e-5bc7-47ae-a041-ea2d9dccd749'
             DisplayName  = 'Not allowed resource types'
@@ -129,22 +175,6 @@ function Get-PolicyRecommendations {
             )
         }
         [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/a08ec900-254a-4555-9bf5-e42af04b5c5c'
-            DisplayName  = 'Allowed resource types'
-            Category     = 'General'
-            Pillar       = 'Optimize'
-            Priority     = 'Optional'
-            DefaultEffect = 'Deny'
-            AllowedEffects = @('Deny')
-            Purpose      = 'Allowlist resource types to prevent deployment of costly or unsanctioned services'
-            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
-            Parameters   = @(
-                @{ Name = 'listOfAllowedTypes'; Label = 'Allowed resource types (comma-separated)'; Required = $true; IsArray = $true }
-            )
-        }
-
-        # === STORAGE COST CONTROL ===
-        [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/7433c107-6db4-4ad1-b57a-a76dce0154a1'
             DisplayName  = 'Storage accounts should be limited by allowed SKUs'
             Category     = 'Storage'
@@ -158,8 +188,6 @@ function Get-PolicyRecommendations {
                 @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed storage SKUs (comma-separated, e.g. Standard_LRS,Standard_GRS)'; Required = $true; IsArray = $true }
             )
         }
-
-        # === HYBRID BENEFIT ===
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/51387e78-44a2-4b7e-a0f7-140b1e6a9ab7'
             DisplayName  = 'Audit VMs that do not use managed disks'
@@ -171,32 +199,6 @@ function Get-PolicyRecommendations {
             Purpose      = 'Managed disks are cheaper and more reliable than unmanaged disks'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#compute'
         }
-
-        # === COST VISIBILITY ===
-        [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/0015ea4d-51ff-4ce3-8d8c-f3f8f0179a56'
-            DisplayName  = 'Audit resource location matches resource group location'
-            Category     = 'General'
-            Pillar       = 'Understand'
-            Priority     = 'Optional'
-            DefaultEffect = 'Audit'
-            AllowedEffects = @('Audit')
-            Purpose      = 'Mismatched locations cause unexpected data transfer costs and latency charges'
-            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
-        }
-        [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/fee5cb2b-9d9b-410e-afe3-2571a06b6bcd'
-            DisplayName  = 'Exclude Usage Costs Resources'
-            Category     = 'General'
-            Pillar       = 'Quantify'
-            Priority     = 'Optional'
-            DefaultEffect = 'Deny'
-            AllowedEffects = @('Audit','Deny','Disabled')
-            Purpose      = 'Prevent creation of metered/usage-based resources where not explicitly approved'
-            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#general'
-        }
-
-        # === BACKUP COST GOVERNANCE ===
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/013e242c-8828-4970-87b3-ab247555486d'
             DisplayName  = 'Azure Backup should be enabled for Virtual Machines'
@@ -207,22 +209,6 @@ function Get-PolicyRecommendations {
             AllowedEffects = @('AuditIfNotExists','Disabled')
             Purpose      = 'Ensure VMs are backed up to prevent costly data loss recovery scenarios'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#backup'
-        }
-
-        # === COSMOS DB THROUGHPUT ===
-        [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/0b7ef78e-a035-4f23-b9bd-aff122a1b1cf'
-            DisplayName  = 'Azure Cosmos DB throughput should be limited'
-            Category     = 'Cosmos DB'
-            Pillar       = 'Optimize'
-            Priority     = 'Optional'
-            DefaultEffect = 'Deny'
-            AllowedEffects = @('Audit','Deny','Disabled')
-            Purpose      = 'Cap Cosmos DB throughput (RU/s) to prevent runaway database costs'
-            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#cosmos-db'
-            Parameters   = @(
-                @{ Name = 'throughputMax'; Label = 'Max throughput (RU/s, e.g. 4000)'; Required = $true }
-            )
         }
     )
 

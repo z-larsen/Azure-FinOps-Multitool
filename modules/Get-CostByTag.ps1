@@ -61,6 +61,21 @@ function Get-CostByTag {
         }
     }
 
+    # Also include any additional existing tags not already in the list (up to 5 total to avoid 429 throttling)
+    if ($ExistingTags -and $tagsToQuery.Count -lt 5) {
+        $alreadyLower = $tagsToQuery | ForEach-Object { $_.ToLower() }
+        $systemPrefixes = @('hidden-', 'ms-resource-', 'aks-managed-', 'kubernetes.io', 'displayname')
+        foreach ($key in $ExistingTags.Keys) {
+            if ($tagsToQuery.Count -ge 5) { break }
+            if ($key.ToLower() -in $alreadyLower) { continue }
+            $skip = $false
+            foreach ($prefix in $systemPrefixes) {
+                if ($key.ToLower().StartsWith($prefix)) { $skip = $true; break }
+            }
+            if (-not $skip) { $tagsToQuery += $key }
+        }
+    }
+
     $results = @{}
     $useMgScope = Test-MgCostScope
     $mgPath = "/providers/Microsoft.Management/managementGroups/$TenantId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
@@ -79,13 +94,19 @@ function Get-CostByTag {
         for ($i = 0; $i -lt $cols.Count; $i++) {
             $n = $cols[$i].name.ToLower()
             if ($n -eq 'cost' -or $n -eq 'totalcost' -or $n -match 'precost|pretaxcost') { $costIdx = $i }
-            elseif ($cols[$i].type -eq 'String' -and $currIdx -eq -1 -and $n -match 'currency|billingcurrency') { $currIdx = $i }
-            elseif ($cols[$i].type -eq 'String' -and $tagIdx -eq -1) { $tagIdx = $i }
+            elseif ($n -match 'currency|billingcurrency') { $currIdx = $i }
+            elseif ($n -eq 'tagvalue')  { $tagIdx = $i }
         }
-        # Fallback to positional if column detection missed
+        # Fallback: if TagValue column not found, pick first String column that isn't TagKey or Currency
+        if ($tagIdx -eq -1) {
+            for ($i = 0; $i -lt $cols.Count; $i++) {
+                if ($cols[$i].type -eq 'String' -and $i -ne $currIdx -and $cols[$i].name.ToLower() -ne 'tagkey') { $tagIdx = $i; break }
+            }
+        }
+        # Final positional fallback
         if ($costIdx -eq -1) { $costIdx = 0 }
-        if ($tagIdx -eq -1)  { $tagIdx  = 1 }
-        if ($currIdx -eq -1) { $currIdx = 2 }
+        if ($tagIdx -eq -1)  { $tagIdx  = if ($cols.Count -ge 4) { 2 } else { 1 } }
+        if ($currIdx -eq -1) { $currIdx = if ($cols.Count -ge 4) { 3 } else { 2 } }
 
         foreach ($row in $result.properties.rows) {
             $cost     = [math]::Round([double]$row[$costIdx], 2)
@@ -96,8 +117,8 @@ function Get-CostByTag {
         return $parsed
     }
 
-    # Build both timeframe bodies: MonthToDate first, then TheLastMonth as fallback
-    $timeframes = @('MonthToDate', 'TheLastMonth')
+    # Build both timeframe bodies: MonthToDate first, then last month as fallback
+    $timeframes = @('MonthToDate', 'Custom')
 
     $perSubFailed = $false   # Track if per-sub fallback consistently returns nothing
 
@@ -118,24 +139,33 @@ function Get-CostByTag {
                 if ($gotData) { break }
 
                 Write-Host "  Querying cost by tag: $tagName ($tf)..." -ForegroundColor Cyan
-                $body = @{
+                $bodyObj = @{
                     type      = 'ActualCost'
-                    timeframe = $tf
                     dataset   = @{
                         granularity = 'None'
                         aggregation = @{
                             totalCost = @{ name = 'Cost'; function = 'Sum' }
                         }
                         grouping = @(
-                            @{ type = 'Tag'; name = $tagName }
+                            @{ type = 'TagKey'; name = $tagName }
                         )
                     }
-                } | ConvertTo-Json -Depth 10
+                }
+                if ($tf -eq 'Custom') {
+                    $lastMonthStart = (Get-Date).AddMonths(-1).ToString('yyyy-MM-01')
+                    $lastMonthEnd   = (Get-Date -Day 1).AddDays(-1).ToString('yyyy-MM-dd')
+                    $bodyObj['timeframe'] = 'Custom'
+                    $bodyObj['timePeriod'] = @{ from = $lastMonthStart; to = $lastMonthEnd }
+                } else {
+                    $bodyObj['timeframe'] = $tf
+                }
+                $body = $bodyObj | ConvertTo-Json -Depth 10
 
                 $tagCosts = [System.Collections.Generic.List[PSCustomObject]]::new()
 
                 if ($useMgScope) {
                     $response = Invoke-AzRestMethodWithRetry -Path $mgPath -Method POST -Payload $body
+                    Write-Host "    MG-scope response: HTTP $($response.StatusCode)" -ForegroundColor Gray
                     if ($response.StatusCode -in @(401, 403)) {
                         Set-MgCostScopeFailed
                         Write-Warning "  MG-scope cost-by-tag returned HTTP $($response.StatusCode) - falling back to per-subscription"
@@ -143,6 +173,10 @@ function Get-CostByTag {
                     }
                     elseif ($response.StatusCode -ne 200) {
                         Write-Warning "  MG-scope cost-by-tag returned HTTP $($response.StatusCode) - falling back to per-subscription"
+                        if ($response.Content) {
+                            $errBody = try { ($response.Content | ConvertFrom-Json).error.message } catch { $response.Content.Substring(0, [math]::Min(200, $response.Content.Length)) }
+                            Write-Warning "    Response: $errBody"
+                        }
                         $useMgScope = $false
                     }
                     else {
@@ -167,11 +201,26 @@ function Get-CostByTag {
                     for ($i = 0; $i -lt $sampleSize; $i++) {
                         $sub = $Subscriptions[$i]
                         $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+                        Write-Host "    Per-sub query: $($sub.Name) ($tf)..." -ForegroundColor Gray
                         $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
+                        Write-Host "    Per-sub response: HTTP $($subResp.StatusCode)" -ForegroundColor Gray
                         if ($subResp.StatusCode -eq 200) {
+                            # Log raw response for diagnostics
+                            $rawParsed = try { ($subResp.Content | ConvertFrom-Json) } catch { $null }
+                            $rowCount = if ($rawParsed -and $rawParsed.properties -and $rawParsed.properties.rows) { $rawParsed.properties.rows.Count } else { 0 }
+                            $colNames = if ($rawParsed -and $rawParsed.properties -and $rawParsed.properties.columns) { ($rawParsed.properties.columns | ForEach-Object { "$($_.name)($($_.type))" }) -join ', ' } else { 'N/A' }
+                            Write-Host "    Columns: $colNames | Rows: $rowCount" -ForegroundColor Gray
+                            if ($rowCount -gt 0 -and $rowCount -le 5) {
+                                foreach ($row in $rawParsed.properties.rows) {
+                                    Write-Host "      Row: $($row -join ' | ')" -ForegroundColor DarkGray
+                                }
+                            }
                             $subRows = Parse-CostRows -ResponseContent $subResp.Content
                             foreach ($r in $subRows) { [void]$tagCosts.Add($r) }
                             if ($subRows.Count -gt 0) { $sampleHits++ }
+                        } elseif ($subResp.Content) {
+                            $errBody = try { ($subResp.Content | ConvertFrom-Json).error.message } catch { $subResp.Content.Substring(0, [math]::Min(300, $subResp.Content.Length)) }
+                            Write-Warning "    Per-sub error: $errBody"
                         }
                     }
 

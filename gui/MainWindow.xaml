@@ -253,6 +253,9 @@
                             <ComboBox x:Name="TagSelector" Width="250" HorizontalAlignment="Left" Margin="0,0,0,15" FontSize="12" Padding="6,4"/>
                             <DataGrid x:Name="CostByTagGrid" MaxHeight="400"/>
 
+                            <!-- Cost Allocation Summary -->
+
+
                             <TextBlock x:Name="NoTagsLabel" Text="" FontSize="13" Foreground="#D83B01" Margin="0,20,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
                     </ScrollViewer>
@@ -335,7 +338,7 @@
                             <WrapPanel Margin="0,10,0,10">
                                 <Border Style="{StaticResource Card}" Width="180">
                                     <StackPanel>
-                                        <TextBlock Text="Policy Assignments" FontSize="11" Foreground="#999"/>
+                                        <TextBlock Text="Total Assignments" FontSize="11" Foreground="#999"/>
                                         <TextBlock x:Name="PolicyCountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#0078D4"/>
                                     </StackPanel>
                                 </Border>
@@ -353,7 +356,7 @@
                                 </Border>
                                 <Border Style="{StaticResource Card}" Width="180">
                                     <StackPanel>
-                                        <TextBlock Text="FinOps Policies" FontSize="11" Foreground="#999"/>
+                                        <TextBlock Text="CAF Policies" FontSize="11" Foreground="#999"/>
                                         <TextBlock x:Name="PolicyRecsCountText" Text="&#x2014;" FontSize="22" FontWeight="Bold" Foreground="#8764B8"/>
                                     </StackPanel>
                                 </Border>
@@ -361,7 +364,7 @@
 
                             <!-- Policy Inventory -->
                             <TextBlock Text="Policy Assignment Inventory" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="All policy assignments across your scanned subscriptions." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <TextBlock Text="All policy and initiative assignments across your scanned subscriptions." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
                             <DataGrid x:Name="PolicyInventoryGrid" MaxHeight="250"/>
 
                             <!-- Per-Sub Compliance -->
@@ -370,7 +373,7 @@
                             <DataGrid x:Name="PolicyComplianceGrid" MaxHeight="200"/>
 
                             <!-- FinOps Policy Recommendations -->
-                            <TextBlock Text="Recommended FinOps Policies (Microsoft Guidance)" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="CAF Recommended Policies &amp; Initiatives" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="PolicyRecsComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>
                             <DataGrid x:Name="PolicyRecsGrid" MaxHeight="250"/>
 

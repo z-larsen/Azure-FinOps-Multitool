@@ -668,39 +668,48 @@ function Populate-TagsTab {
     }
 }
 
-function Populate-OptimizationTab {
-    $d = $script:scanData
+#-----------------------------------------------------------------------
+# SHARED RESOURCE COST LOOKUP (used by Optimization + Orphan sections)
+#-----------------------------------------------------------------------
+$script:resCostMap = @{}
+$script:resCostMapBuilt = $false
 
-    # Build resource cost lookups: by full ARM path (lowercase) AND by name (lowercase)
-    $resCostMap = @{}
+function Build-ResourceCostMap {
+    $d = $script:scanData
+    $script:resCostMap = @{}
     if ($d.ResourceCosts) {
         foreach ($rc in $d.ResourceCosts) {
             if ($rc.ResourcePath) {
-                $resCostMap[$rc.ResourcePath.ToLower()] = $rc
+                $script:resCostMap[$rc.ResourcePath.ToLower()] = $rc
             }
-            # Also key by name (last segment)
             if ($rc.ResourcePath -match '/([^/]+)$') {
                 $nameKey = $Matches[1].ToLower()
-                if (-not $resCostMap.ContainsKey($nameKey)) { $resCostMap[$nameKey] = $rc }
+                if (-not $script:resCostMap.ContainsKey($nameKey)) { $script:resCostMap[$nameKey] = $rc }
             }
         }
     }
+    $script:resCostMapBuilt = $true
+}
 
-    # Helper: find resource cost by constructing ARM ID, then fallback to name
-    function Find-ResourceCost {
-        param($Name, $SubscriptionId, $ResourceGroup, $ResourceType)
-        $rc = $null
-        # Try full ARM path first
-        if ($SubscriptionId -and $ResourceGroup -and $ResourceType -and $Name) {
-            $armId = "/subscriptions/$SubscriptionId/resourcegroups/$ResourceGroup/providers/$ResourceType/$Name".ToLower()
-            $rc = $resCostMap[$armId]
-        }
-        # Fallback to name-only
-        if (-not $rc -and $Name) {
-            $rc = $resCostMap[$Name.ToLower()]
-        }
-        return $rc
+function Find-ResourceCost {
+    param($Name, $SubscriptionId, $ResourceGroup, $ResourceType)
+    if (-not $script:resCostMapBuilt) { Build-ResourceCostMap }
+    $rc = $null
+    if ($SubscriptionId -and $ResourceGroup -and $ResourceType -and $Name) {
+        $armId = "/subscriptions/$SubscriptionId/resourcegroups/$ResourceGroup/providers/$ResourceType/$Name".ToLower()
+        $rc = $script:resCostMap[$armId]
     }
+    if (-not $rc -and $Name) {
+        $rc = $script:resCostMap[$Name.ToLower()]
+    }
+    return $rc
+}
+
+function Populate-OptimizationTab {
+    $d = $script:scanData
+
+    # Ensure shared resource cost map is built
+    if (-not $script:resCostMapBuilt) { Build-ResourceCostMap }
 
     # Currency helper
     $currency = if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) {
@@ -1775,8 +1784,10 @@ function Populate-PolicyTab {
 
         # Assignment inventory grid
         $invRows = $d.PolicyInv.Assignments | ForEach-Object {
+            $type = if ($_.PolicyDefId -match '/policySetDefinitions/') { 'Initiative' } else { 'Policy' }
             [PSCustomObject]@{
-                'Policy Name'     = $_.AssignmentName
+                'Assignment Name' = $_.AssignmentName
+                'Type'            = $type
                 'Effect'          = $_.Effect
                 'Enforcement'     = $_.EnforcementMode
                 'Origin'          = $_.Origin
@@ -1806,7 +1817,7 @@ function Populate-PolicyTab {
         $assignedCount  = $d.PolicyRecs.Assigned.Count
         $analysisCount  = $d.PolicyRecs.Analysis.Count
         $script:PolicyRecsCountText.Text = "$assignedCount / $analysisCount"
-        $script:PolicyRecsComplianceText.Text = "FinOps policy coverage: $($d.PolicyRecs.CompliancePct)% ($assignedCount of $analysisCount recommended policies assigned)"
+        $script:PolicyRecsComplianceText.Text = "CAF policy coverage: $($d.PolicyRecs.CompliancePct)% ($assignedCount of $analysisCount recommended policies assigned)"
 
         $recRows = $d.PolicyRecs.Analysis | ForEach-Object {
             [PSCustomObject]@{
@@ -2043,10 +2054,10 @@ function Populate-BudgetSection {
             [void]$rows.Add([PSCustomObject]@{
                 Subscription = $budget.Subscription
                 'Budget Name' = $budget.BudgetName
-                'Budget Amount' = $budget.BudgetAmount.ToString('N2')
-                'Actual Spend' = $budget.ActualSpend.ToString('N2')
-                '% Used' = "$($budget.PercentUsed)%"
-                'Forecast' = $budget.ForecastSpend.ToString('N2')
+                'Budget Amount' = ([double]$budget.Amount).ToString('N2')
+                'Actual Spend' = ([double]$budget.ActualSpend).ToString('N2')
+                '% Used' = "$($budget.PctUsed)%"
+                'Forecast' = ([double]$budget.Forecast).ToString('N2')
                 'Risk' = $budget.Risk
                 'Currency' = $budget.Currency
             })
@@ -2172,6 +2183,21 @@ function Populate-CommitmentSection {
 function Populate-OrphanedSection {
     $d = $script:scanData
 
+    # Map orphan categories to ARM resource types for cost lookup
+    $categoryToType = @{
+        'Orphaned Disk'         = 'microsoft.compute/disks'
+        'Unattached Public IP'  = 'microsoft.network/publicipaddresses'
+        'Unattached NIC'        = 'microsoft.network/networkinterfaces'
+        'Deallocated VM'        = 'microsoft.compute/virtualmachines'
+        'Empty App Service Plan'= 'microsoft.web/serverfarms'
+        'Old Snapshot'          = 'microsoft.compute/snapshots'
+    }
+
+    # Currency helper
+    $currency = if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) {
+        Get-CurrencySymbol -Code $d.ResourceCosts[0].Currency
+    } else { '$' }
+
     if ($d.Orphans -and $d.Orphans.Orphans.Count -gt 0) {
         $orphans = $d.Orphans.Orphans
         $script:OrphanCountText.Text = "$($orphans.Count) found"
@@ -2181,23 +2207,55 @@ function Populate-OrphanedSection {
         $catParts = $byCat | ForEach-Object { "$($_.Count) $($_.Name)" }
         $script:OrphanDetailText.Text = ($catParts -join ', ')
 
-        $summary = "$($orphans.Count) orphaned/idle resources found across $($byCat.Count) categories. Review and delete to reduce waste."
-        $highImpact = @($orphans | Where-Object { $_.Impact -eq 'High' })
-        if ($highImpact.Count -gt 0) { $summary += " $($highImpact.Count) are high-impact." }
-        $script:OrphanSummaryText.Text = $summary
-
         $orphanRows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $totalWaste = 0.0
+        $costedCount = 0
+
         foreach ($o in $orphans) {
+            $rc = $null
+            $armType = $categoryToType[$o.Category]
+            if ($armType -and $d.ResourceCosts) {
+                $rc = Find-ResourceCost -Name $o.ResourceName -SubscriptionId $o.SubscriptionId -ResourceGroup $o.ResourceGroup -ResourceType $armType
+            }
+            $mtdCost = if ($rc -and $rc.Actual) { $rc.Actual } else { $null }
+            $annualEst = if ($mtdCost -and $mtdCost -gt 0) {
+                $dayOfMonth = (Get-Date).Day
+                $daysInMonth = [DateTime]::DaysInMonth((Get-Date).Year, (Get-Date).Month)
+                $projectedMonthly = $mtdCost / $dayOfMonth * $daysInMonth
+                [math]::Round($projectedMonthly * 12, 2)
+            } else { $null }
+
+            if ($mtdCost -and $mtdCost -gt 0) {
+                $totalWaste += $mtdCost
+                $costedCount++
+            }
+
             [void]$orphanRows.Add([PSCustomObject]@{
-                Category      = $o.Category
-                Resource      = $o.ResourceName
+                Category         = $o.Category
+                Resource         = $o.ResourceName
                 'Resource Group' = $o.ResourceGroup
-                Location      = $o.Location
-                Detail        = $o.Detail
-                Impact        = $o.Impact
+                Location         = $o.Location
+                Detail           = $o.Detail
+                'Cost (MTD)'     = if ($mtdCost) { "$currency$($mtdCost.ToString('N2'))" } else { '-' }
+                'Est. Annual'    = if ($annualEst) { "$currency$($annualEst.ToString('N2'))" } else { '-' }
             })
         }
         $script:OrphanGrid.ItemsSource = @($orphanRows)
+
+        # Summary with dollar amounts
+        $summary = "$($orphans.Count) orphaned/idle resources found across $($byCat.Count) categories."
+        if ($costedCount -gt 0) {
+            $annualTotal = 0.0
+            $dayOfMonth = (Get-Date).Day
+            $daysInMonth = [DateTime]::DaysInMonth((Get-Date).Year, (Get-Date).Month)
+            $annualTotal = [math]::Round(($totalWaste / $dayOfMonth * $daysInMonth) * 12, 2)
+            $summary += " Estimated waste: $currency$($totalWaste.ToString('N2')) MTD ($currency$($annualTotal.ToString('N2'))/yr projected) across $costedCount costed resources."
+        }
+        $uncosted = $orphans.Count - $costedCount
+        if ($uncosted -gt 0) {
+            $summary += " $uncosted resources had no cost data (may be zero-cost or recently created)."
+        }
+        $script:OrphanSummaryText.Text = $summary
     } else {
         $script:OrphanCountText.Text = '0'
         $script:OrphanDetailText.Text = 'No orphaned resources'
@@ -2891,10 +2949,10 @@ $script:TagSelector.Add_SelectionChanged({
 
     $data = $script:scanData.CostByTag.CostByTag
     $tf   = $script:scanData.CostByTag.UsedTimeframe
-    $costLabel = if ($tf -eq 'TheLastMonth') { 'Cost (Last Month)' } else { 'Cost (MTD)' }
+    $costLabel = if ($tf -eq 'Custom') { 'Cost (Last Month)' } else { 'Cost (MTD)' }
 
     if ($data.ContainsKey($selectedTag) -and $data[$selectedTag].Count -gt 0) {
-        $tfNote = if ($tf -eq 'TheLastMonth') { ' (showing last month - current month data still processing)' } else { '' }
+        $tfNote = if ($tf -eq 'Custom') { ' (showing last month - current month data still processing)' } else { '' }
         $script:NoTagsLabel.Text = $tfNote
         $rows = $data[$selectedTag] | ForEach-Object {
             [PSCustomObject]@{
