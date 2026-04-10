@@ -1,6 +1,11 @@
 
 # AZURE FINOPS MULTITOOL
 
+![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
+![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
+![License MIT](https://img.shields.io/badge/License-MIT-green)
+![Version 1.14.0](https://img.shields.io/badge/Version-1.14.0-brightgreen)
+
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
 opportunities, and FinOps maturity — organized around the three FinOps
@@ -415,11 +420,17 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 
 ## Author
 
-Built by **Zac Larsen**, Cloud Solution Architect @ Microsoft.
+**Zac Larsen** — Personal project (not an official Microsoft product)
 
-Developed from real-world FinOps customer engagements to solve the gap between "we know we need FinOps" and "we have actionable visibility today." Designed as a complement to the Azure FinOps Toolkit.
+---
 
-Questions, feedback, and contributions welcome.
+## Support & Responsible Use
+
+This tool queries only public Azure APIs (Cost Management, Resource Graph, Advisor, Billing) against **your own Azure subscriptions**. It reads subscription metadata (such as subscription IDs/names, regions, budgets, and usage) and writes results locally (console output and CSV/XLSX exports); it does **not** transmit this data off your machine except as required to call Azure APIs.
+
+- **Issues & PRs:** Welcome! Please do not include subscription IDs, tenant IDs, internal URLs, or any confidential information.
+- **Azure support:** For Azure platform issues or outages, contact [Azure Support](https://azure.microsoft.com/support/) — not this repository.
+- **Exported files:** Review CSV/XLSX exports before sharing externally — they may contain subscription IDs, region information, budgets, and usage details for your environment.
 
 ---
 
