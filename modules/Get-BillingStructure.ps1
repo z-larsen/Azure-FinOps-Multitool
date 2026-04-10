@@ -9,7 +9,9 @@
 
 function Get-BillingStructure {
     [CmdletBinding()]
-    param()
+    param(
+        [object[]]$Subscriptions
+    )
 
     Write-Host "  Querying billing structure..." -ForegroundColor Cyan
 
@@ -17,6 +19,22 @@ function Get-BillingStructure {
     $billingProfiles = @()
     $invoiceSections = @()
     $costAllocationRules = @()
+
+    # -- Resolve billing account IDs linked to tenant subscriptions -----
+    $tenantBillingAccountIds = @{}
+    if ($Subscriptions) {
+        foreach ($sub in @($Subscriptions | Select-Object -First 5)) {
+            try {
+                $biPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Billing/billingInfo/default?api-version=2024-04-01"
+                $biResp = Invoke-AzRestMethodWithRetry -Path $biPath -Method GET
+                if ($biResp.StatusCode -eq 200) {
+                    $biResult = ($biResp.Content | ConvertFrom-Json)
+                    $baId = $biResult.properties.billingAccountId
+                    if ($baId) { $tenantBillingAccountIds[$baId] = $true }
+                }
+            } catch { }
+        }
+    }
 
     # -- Step 1: Get Billing Accounts -----------------------------------
     try {
@@ -26,6 +44,10 @@ function Get-BillingStructure {
             $baResult = ($baResp.Content | ConvertFrom-Json)
             if ($baResult.value) {
                 foreach ($ba in $baResult.value) {
+                    # Filter to billing accounts associated with this tenant
+                    if ($tenantBillingAccountIds.Count -gt 0 -and -not $tenantBillingAccountIds.ContainsKey($ba.id)) {
+                        continue
+                    }
                     $props = $ba.properties
                     $billingAccounts += [PSCustomObject]@{
                         AccountId     = $ba.name
