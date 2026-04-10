@@ -7,36 +7,6 @@ opportunities, and FinOps maturity — organized around the three FinOps
 pillars: **Understand**, **Quantify**, and **Optimize**.
 
 A lightweight, read‑only scanner designed to complement the Microsoft FinOps Toolkit. It does not replace Cost Management, FinOps Hubs, or Power BI starter kits. Instead, it helps practitioners quickly identify gaps, validate assumptions, and accelerate conversations during FinOps workshops and scoping engagements.
----
-
-## Screenshots
-
-### Choose Tenant — Multi-Tenant Picker
-![Choose Tenant](screenshots/chooseTenant.png)
-
-### Overview — Cost Summary, Budget Status & Subscription Scorecard
-![Overview](screenshots/overview.png)
-
-### Cost Analysis — 6-Month Trend, Anomalies & Cost by Tag
-![Cost Analysis](screenshots/cost%20analysis.png)
-
-### Tags — Inventory & CAF Compliance
-![Tags](screenshots/tags.png)
-
-### Policy — Azure Policy Inventory, Compliance & FinOps Policy Deployment
-![Policy](screenshots/policy.png)
-
-### Optimization — Commitments, Orphaned Resources, AHB, RI/SP, Advisor
-![Optimization](screenshots/optimization.png)
-
-### Billing — Accounts, Profiles, Invoice Sections, Cost Allocation
-![Billing](screenshots/billing.png)
-
-### FinOps Guidance — Maturity Assessment
-![FinOps Guidance](screenshots/finops-guidance.png)
-
-### Export Report
-![Export Report](screenshots/report.png)
 
 ---
 
