@@ -44,10 +44,16 @@ function Show-TenantPicker {
     $cancelBtn = $dlg.FindName('CancelBtn')
 
     foreach ($t in $Tenants) {
-        $display = if ($t.Name -and $t.Name -ne $t.TenantId) { "$($t.Name)  ($($t.TenantId))" } else { $t.TenantId }
+        $envTag = if ($t.PSObject.Properties['Environment']) { $t.Environment } else { '' }
+        $envLabel = switch ($envTag) {
+            'AzureUSGovernment' { ' [GOV]' }
+            'AzureCloud'        { ' [Commercial]' }
+            default             { '' }
+        }
+        $display = if ($t.Name -and $t.Name -ne $t.TenantId) { "$($t.Name)$envLabel  ($($t.TenantId))" } else { "$($t.TenantId)$envLabel" }
         $item = [System.Windows.Controls.ListBoxItem]::new()
         $item.Content = $display
-        $item.Tag = $t.TenantId
+        $item.Tag = "$($t.TenantId)|$envTag"
         $list.Items.Add($item) | Out-Null
     }
 
@@ -60,7 +66,8 @@ function Show-TenantPicker {
 
     $picked = $dlg.ShowDialog()
     if ($picked -and $list.SelectedItem) {
-        return $list.SelectedItem.Tag
+        $parts = $list.SelectedItem.Tag -split '\|', 2
+        return [PSCustomObject]@{ TenantId = $parts[0]; Environment = $parts[1] }
     }
     return $null
 }
@@ -115,31 +122,59 @@ function Initialize-Scanner {
         $ctx = Get-AzContext
     }
 
-    # List all accessible tenants and let user choose
+    # List all accessible tenants across environments
     Write-Host "  Loading accessible tenants..." -ForegroundColor Cyan
-    $tenants = @(Get-AzTenant -ErrorAction SilentlyContinue)
+    $allTenants = [System.Collections.Generic.List[object]]::new()
+    $seenTenantIds = @{}
 
-    if ($tenants.Count -eq 0) {
+    # Get tenants from current environment
+    $tenants = @(Get-AzTenant -ErrorAction SilentlyContinue)
+    foreach ($t in $tenants) {
+        $t | Add-Member -NotePropertyName 'Environment' -NotePropertyValue $Environment -Force
+        $allTenants.Add($t)
+        $seenTenantIds[$t.TenantId] = $true
+    }
+
+    # Probe the alternate environment for additional tenants
+    $altEnv = if ($Environment -eq 'AzureCloud') { 'AzureUSGovernment' } else { 'AzureCloud' }
+    try {
+        Write-Host "  Checking $altEnv for additional tenants..." -ForegroundColor Cyan
+        if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
+        Connect-AzAccount -Environment $altEnv -ErrorAction Stop | Out-Null
+        if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
+        $altTenants = @(Get-AzTenant -ErrorAction SilentlyContinue)
+        foreach ($t in $altTenants) {
+            if (-not $seenTenantIds.ContainsKey($t.TenantId)) {
+                $t | Add-Member -NotePropertyName 'Environment' -NotePropertyValue $altEnv -Force
+                $allTenants.Add($t)
+                $seenTenantIds[$t.TenantId] = $true
+            }
+        }
+        # Switch back to original environment context
+        Connect-AzAccount -Environment $Environment -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        Write-Host "  No additional tenants found in $altEnv" -ForegroundColor DarkGray
+        if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
+    }
+
+    if ($allTenants.Count -eq 0) {
         throw "No accessible tenants found."
     }
 
     # Always show tenant picker (even with 1 tenant, let user confirm)
-    $selectedTenantId = Show-TenantPicker -Tenants $tenants
-    if (-not $selectedTenantId) {
+    $selection = Show-TenantPicker -Tenants $allTenants
+    if (-not $selection) {
         throw "Tenant selection cancelled."
     }
 
-    if ($selectedTenantId -ne $ctx.Tenant.Id) {
-        Write-Host "  Switching to tenant $selectedTenantId..." -ForegroundColor Cyan
+    $selectedTenantId = $selection.TenantId
+    $selectedEnv = if ($selection.Environment) { $selection.Environment } else { $Environment }
+
+    if ($selectedTenantId -ne $ctx.Tenant.Id -or $selectedEnv -ne $ctx.Environment.Name) {
+        Write-Host "  Switching to tenant $selectedTenantId ($selectedEnv)..." -ForegroundColor Cyan
         if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
         try {
-            try {
-                Connect-AzAccount -Environment $Environment -TenantId $selectedTenantId -ErrorAction Stop | Out-Null
-            } catch {
-                $altEnv = if ($Environment -eq 'AzureCloud') { 'AzureUSGovernment' } else { 'AzureCloud' }
-                Write-Host "  Retrying with $altEnv..." -ForegroundColor Yellow
-                Connect-AzAccount -Environment $altEnv -TenantId $selectedTenantId -ErrorAction Stop | Out-Null
-            }
+            Connect-AzAccount -Environment $selectedEnv -TenantId $selectedTenantId -ErrorAction Stop | Out-Null
         } finally {
             if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
         }
