@@ -98,9 +98,18 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 ## Quick Start
 
 ```powershell
+# If downloaded from GitHub, unblock the files first:
+Get-ChildItem -Path .\AzureFinOpsMultitool -Recurse | Unblock-File
+
+# Set execution policy if needed (current user only):
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
 cd AzureFinOpsMultitool
 .\Start-FinOpsMultitool.ps1
 ```
+
+> **"Not digitally signed" error?** Windows marks downloaded files as blocked.
+> Run `Unblock-File` on the extracted folder or right-click the `.ps1` file → Properties → check **Unblock**.
 
 1. The WPF window opens (no authentication yet)
 2. Click **Choose Tenant** — a browser login opens; after sign-in, a
