@@ -189,17 +189,6 @@ function Get-PolicyRecommendations {
             )
         }
         [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/51387e78-44a2-4b7e-a0f7-140b1e6a9ab7'
-            DisplayName  = 'Audit VMs that do not use managed disks'
-            Category     = 'Compute'
-            Pillar       = 'Optimize'
-            Priority     = 'Recommended'
-            DefaultEffect = 'Audit'
-            AllowedEffects = @('Audit')
-            Purpose      = 'Managed disks are cheaper and more reliable than unmanaged disks'
-            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#compute'
-        }
-        [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/013e242c-8828-4970-87b3-ab247555486d'
             DisplayName  = 'Azure Backup should be enabled for Virtual Machines'
             Category     = 'Backup'
