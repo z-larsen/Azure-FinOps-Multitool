@@ -108,8 +108,13 @@ cd AzureFinOpsMultitool
 .\Start-FinOpsMultitool.ps1
 ```
 
+**Alternative — run with bypass (no policy change required):**
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Start-FinOpsMultitool.ps1
+```
+
 > **"Not digitally signed" error?** Windows marks downloaded files as blocked.
-> Run `Unblock-File` on the extracted folder or right-click the `.ps1` file → Properties → check **Unblock**.
+> Run `Unblock-File` on the extracted folder, or use the `-ExecutionPolicy Bypass` command above, or right-click the `.ps1` file → Properties → check **Unblock**.
 
 1. The WPF window opens (no authentication yet)
 2. Click **Choose Tenant** — a browser login opens; after sign-in, a
