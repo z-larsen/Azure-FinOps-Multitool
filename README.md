@@ -432,6 +432,17 @@ This tool queries only public Azure APIs (Cost Management, Resource Graph, Advis
 - **Azure support:** For Azure platform issues or outages, contact [Azure Support](https://azure.microsoft.com/support/) — not this repository.
 - **Exported files:** Review HTML/CSV exports before sharing externally — they may contain subscription IDs, region information, budgets, and usage details for your environment.
 
+This project may access or process Azure Cost Management, Policy, Resource Graph, or Subscription metadata through Azure APIs.
+
+Execution of this tool may initiate:
+- Resource discovery
+- Policy evaluation
+- Cost data queries
+- Tagging analysis
+- Configuration inspection
+
+Ensure that least‑privilege access is used when running this utility.
+
 ---
 
 ## References
