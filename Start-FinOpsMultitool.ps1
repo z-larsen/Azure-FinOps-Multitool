@@ -2837,7 +2837,7 @@ $script:scanStages = @(
         $script:scanData.PolicyRecs = Get-PolicyRecommendations -ExistingAssignments $assignments
     }}
     @{ Label = 'Querying billing structure...';        Pct = 92;  Action = {
-        $script:scanData.Billing = Get-BillingStructure
+        $script:scanData.Billing = Get-BillingStructure -Subscriptions $script:scanData.Auth.Subscriptions
     }}
     @{ Label = 'Building dashboard...';                Pct = 96;  Action = {
         try { Populate-OverviewTab }      catch { Write-Warning "Populate-OverviewTab failed: $($_.Exception.Message)" }
