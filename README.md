@@ -426,11 +426,11 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 
 ## Support & Responsible Use
 
-This tool queries only public Azure APIs (Cost Management, Resource Graph, Advisor, Billing) against **your own Azure subscriptions**. It reads subscription metadata (such as subscription IDs/names, regions, budgets, and usage) and writes results locally (console output and CSV/XLSX exports); it does **not** transmit this data off your machine except as required to call Azure APIs.
+This tool queries only public Azure APIs (Cost Management, Resource Graph, Advisor, Billing) against **your own Azure subscriptions**. It reads subscription metadata (such as subscription IDs/names, regions, budgets, and usage) and writes results locally (console output and HTML/CSV exports); it does **not** transmit this data off your machine except as required to call Azure APIs.
 
 - **Issues & PRs:** Welcome! Please do not include subscription IDs, tenant IDs, internal URLs, or any confidential information.
 - **Azure support:** For Azure platform issues or outages, contact [Azure Support](https://azure.microsoft.com/support/) — not this repository.
-- **Exported files:** Review CSV/XLSX exports before sharing externally — they may contain subscription IDs, region information, budgets, and usage details for your environment.
+- **Exported files:** Review HTML/CSV exports before sharing externally — they may contain subscription IDs, region information, budgets, and usage details for your environment.
 
 ---
 
