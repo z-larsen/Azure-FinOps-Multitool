@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 1.9.15](https://img.shields.io/badge/Version-1.9.15-brightgreen)
+![Version 1.9.16](https://img.shields.io/badge/Version-1.9.16-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -453,6 +453,10 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v1.9.16
+- **Unified export dialog** — single "Export Scan Results" button opens a tile-based chooser (HTML, CSV, Power BI) instead of two separate buttons
+- **Power BI template (.pbit)** — Power BI export now generates a `.pbit` template alongside CSVs; double-click to open in Power BI Desktop with all tables, column types, and relationships pre-configured via a `CsvFolderPath` parameter
 
 ### v1.9.15
 - **Security hardening** — escape single quotes in tag names/values before KQL interpolation (prevents Resource Graph injection), redact bearer tokens from error log output, validate ARM scope format on tag and policy deploy functions

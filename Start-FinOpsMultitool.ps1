@@ -305,7 +305,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton', 'PowerBIExportButton',
+    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
@@ -3023,6 +3023,98 @@ function Populate-Scorecard {
     $script:ScorecardGrid.ItemsSource = @($rows | Sort-Object { [double]($_.'Actual (MTD)' -replace '[^0-9.]','') } -Descending)
 }
 
+# -- Export Format Chooser Dialog ----------------------------------------
+function Show-ExportDialog {
+    $d = $script:scanData
+    if (-not $d -or -not $d.Auth) {
+        [System.Windows.MessageBox]::Show('No scan data available. Run a scan first.', 'Export', 'OK', 'Warning')
+        return
+    }
+
+    $dlgXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="Export Scan Results" Width="520" Height="280" WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" Background="#F3F3F3">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="Choose an export format" FontSize="17" FontWeight="SemiBold"
+                   Foreground="#333" Margin="0,0,0,16"/>
+        <UniformGrid Grid.Row="1" Columns="3" Margin="0">
+            <Border Name="HtmlTile" Background="White" CornerRadius="6" Margin="0,0,8,0" Cursor="Hand"
+                    BorderBrush="#DDD" BorderThickness="1">
+                <Border.Effect><DropShadowEffect ShadowDepth="1" BlurRadius="4" Opacity="0.12"/></Border.Effect>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="&#x1F4C4;" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Text="HTML Report" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="#333"/>
+                    <TextBlock Text="Full formatted report" FontSize="10.5" Foreground="#888" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+            <Border Name="CsvTile" Background="White" CornerRadius="6" Margin="4,0,4,0" Cursor="Hand"
+                    BorderBrush="#DDD" BorderThickness="1">
+                <Border.Effect><DropShadowEffect ShadowDepth="1" BlurRadius="4" Opacity="0.12"/></Border.Effect>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="&#x1F4CB;" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Text="CSV File" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="#333"/>
+                    <TextBlock Text="Subscription cost data" FontSize="10.5" Foreground="#888" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+            <Border Name="PbiTile" Background="White" CornerRadius="6" Margin="8,0,0,0" Cursor="Hand"
+                    BorderBrush="#DDD" BorderThickness="1">
+                <Border.Effect><DropShadowEffect ShadowDepth="1" BlurRadius="4" Opacity="0.12"/></Border.Effect>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="&#x1F4CA;" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Text="Power BI" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="#333"/>
+                    <TextBlock Text="Template + data files" FontSize="10.5" Foreground="#888" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+    </Grid>
+</Window>
+"@
+
+    $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($dlgXaml))
+    $exportWin = [System.Windows.Markup.XamlReader]::Load($reader)
+    $exportWin.Owner = $script:window
+
+    $htmlTile = $exportWin.FindName('HtmlTile')
+    $csvTile  = $exportWin.FindName('CsvTile')
+    $pbiTile  = $exportWin.FindName('PbiTile')
+
+    # Hover effects
+    $hoverIn  = { param($s,$e) $s.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#EBF5FF'); $s.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4') }
+    $hoverOut = { param($s,$e) $s.Background = [System.Windows.Media.Brushes]::White; $s.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#DDD') }
+    foreach ($tile in @($htmlTile, $csvTile, $pbiTile)) {
+        $tile.Add_MouseEnter($hoverIn)
+        $tile.Add_MouseLeave($hoverOut)
+    }
+
+    $htmlTile.Add_MouseLeftButtonDown({
+        $exportWin.Tag = 'HTML'
+        $exportWin.Close()
+    }.GetNewClosure())
+
+    $csvTile.Add_MouseLeftButtonDown({
+        $exportWin.Tag = 'CSV'
+        $exportWin.Close()
+    }.GetNewClosure())
+
+    $pbiTile.Add_MouseLeftButtonDown({
+        $exportWin.Tag = 'PBI'
+        $exportWin.Close()
+    }.GetNewClosure())
+
+    $exportWin.ShowDialog() | Out-Null
+
+    switch ($exportWin.Tag) {
+        'HTML' { Export-ScanReport -Format 'HTML' }
+        'CSV'  { Export-ScanReport -Format 'CSV' }
+        'PBI'  { Export-PowerBIData }
+    }
+}
+
 # -- Power BI Export Function --------------------------------------------
 function Export-PowerBIData {
     $d = $script:scanData
@@ -3034,7 +3126,7 @@ function Export-PowerBIData {
     # Pick export folder via FolderBrowserDialog
     Add-Type -AssemblyName System.Windows.Forms
     $fbd = [System.Windows.Forms.FolderBrowserDialog]::new()
-    $fbd.Description = 'Select folder for Power BI CSV export'
+    $fbd.Description = 'Select folder for Power BI export'
     $fbd.ShowNewFolderButton = $true
     if ($fbd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
 
@@ -3331,71 +3423,198 @@ function Export-PowerBIData {
         & $writeCsv 'Scorecard' @($script:ScorecardGrid.ItemsSource)
     }
 
-    # Write README for Power BI import
-    $readme = @"
-# Power BI Data Import - Azure FinOps Scanner
-Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    # ================================================================
+    # Generate Power BI Template (.pbit)
+    # ================================================================
+    Add-Type -AssemblyName System.IO.Compression
 
-## How to Import into Power BI Desktop
+    $csvFiles = Get-ChildItem -Path $exportDir -Filter '*.csv'
+    $numericPattern = '^(ActualMTD|Forecast|Cost|Amount|ActualSpend|PercentUsed|AnnualSavings|AvgUtilization|MinUtilization|MaxUtilization|ReservedHours|UsedHours|ResourceCount)$'
 
-1. Open **Power BI Desktop**
-2. Click **Get Data** > **Text/CSV**
-3. Navigate to this folder and select a CSV file
-4. Click **Load** (repeat for each CSV)
-5. After loading all CSVs, go to **Model** view to create relationships:
-   - Link ``SubscriptionCosts.SubscriptionId`` to ``ResourceCosts.SubscriptionId`` (if present)
-   - Link ``Budgets.SubscriptionId`` to ``SubscriptionCosts.SubscriptionId``
-   - Link ``OrphanedResources.SubscriptionId`` to ``SubscriptionCosts.SubscriptionId``
+    # Build table definitions dynamically from exported CSVs
+    $modelTables = [System.Collections.Generic.List[hashtable]]::new()
 
-## CSV Files Included
+    # CsvFolderPath parameter (user can update when opening template)
+    $modelTables.Add(@{
+        name = 'CsvFolderPath'
+        annotations = @(
+            @{ name = 'PBI_NavigationStepName'; value = 'Navigation' }
+            @{ name = 'PBI_ResultType'; value = 'Text' }
+        )
+        columns = @(@{
+            name         = 'CsvFolderPath'
+            dataType     = 'string'
+            isHidden     = $true
+            sourceColumn = 'CsvFolderPath'
+            summarizeBy  = 'none'
+            lineageTag   = [guid]::NewGuid().ToString()
+        })
+        lineageTag = [guid]::NewGuid().ToString()
+        partitions = @(@{
+            name   = 'CsvFolderPath'
+            mode   = 'import'
+            source = @{
+                type       = 'm'
+                expression = '"' + $exportDir + '" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]'
+            }
+        })
+    })
 
-| File | Description |
-|------|-------------|
-| SubscriptionCosts.csv | Monthly cost by subscription (Actual MTD + Forecast) |
-| ResourceCosts.csv | Cost breakdown by individual resource |
-| TagInventory.csv | All tags and their values with resource counts |
-| TagRecommendations.csv | FinOps tag compliance analysis |
-| PolicyInventory.csv | Current Azure Policy assignments |
-| PolicyRecommendations.csv | Recommended policies and assignment status |
-| Budgets.csv | Budget status, spend vs. limit, risk level |
-| OrphanedResources.csv | Unused resources with estimated waste |
-| CostByTag.csv | Cost grouped by tag name and value |
-| CostTrend.csv | Monthly cost trend over time |
-| CommitmentUtilization.csv | Reservation and Savings Plan utilization |
-| AHBOpportunities.csv | Azure Hybrid Benefit eligible resources |
-| OptimizationAdvice.csv | Advisor cost optimization recommendations |
-| ReservationAdvice.csv | Reservation purchase recommendations |
-| SavingsRealized.csv | Savings from commitments and optimizations |
-| Scorecard.csv | Per-subscription FinOps health scorecard |
+    # Data tables — read CSV headers to build column defs
+    foreach ($csv in $csvFiles) {
+        $tblName = [System.IO.Path]::GetFileNameWithoutExtension($csv.Name)
+        $headerLine = Get-Content $csv.FullName -First 1
+        $headers = ($headerLine -replace '"','') -split ','
 
-## Suggested Visuals
+        $cols = @()
+        $typeCasts = @()
+        foreach ($h in $headers) {
+            $isNum = $h -match $numericPattern
+            $cols += @{
+                name         = $h
+                dataType     = if ($isNum) { 'double' } else { 'string' }
+                sourceColumn = $h
+                summarizeBy  = if ($isNum) { 'sum' } else { 'none' }
+                lineageTag   = [guid]::NewGuid().ToString()
+            }
+            if ($isNum) { $typeCasts += '{' + "`"$h`"" + ', type number}' }
+        }
 
-- **Cost Overview**: Card visuals for Total Actual, Total Forecast from SubscriptionCosts
-- **Cost Trend**: Line chart from CostTrend (Month on X, Cost on Y)
-- **Cost by Subscription**: Bar chart from SubscriptionCosts
-- **Cost by Tag**: Stacked bar from CostByTag (TagName slicer, TagValue on X, Cost on Y)
-- **Budget Health**: Gauge visuals from Budgets (ActualSpend vs Amount)
-- **Orphan Waste**: Donut chart from OrphanedResources grouped by Category
-- **Optimization Impact**: Table from OptimizationAdvice sorted by AnnualSavings
-- **Commitment Utilization**: Gauge from CommitmentUtilization (AvgUtilization)
-"@
-    $readme | Set-Content -Path (Join-Path $exportDir 'README.md') -Encoding UTF8
+        # Build M query expression lines
+        $mLines = @(
+            'let'
+            '    Source = Csv.Document(File.Contents(CsvFolderPath & "\' + $tblName + '.csv"), [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),'
+            '    Headers = Table.PromoteHeaders(Source, [PromoteAllScalars=true])'
+        )
+        if ($typeCasts.Count -gt 0) {
+            $mLines[2] += ','
+            $castStr = $typeCasts -join ', '
+            $mLines += "    Typed = Table.TransformColumnTypes(Headers, {$castStr})"
+            $mLines += 'in'
+            $mLines += '    Typed'
+        } else {
+            $mLines += 'in'
+            $mLines += '    Headers'
+        }
 
-    # Count actual files written
-    $actualFiles = (Get-ChildItem -Path $exportDir -Filter '*.csv').Count
-    Update-UIStatus "Power BI export complete: $actualFiles CSVs saved to $exportDir" $script:ProgressBar.Value
-    [System.Windows.MessageBox]::Show("Exported $actualFiles CSV files to:`n$exportDir`n`nSee README.md for Power BI import instructions.", 'Power BI Export', 'OK', 'Information')
+        $modelTables.Add(@{
+            name       = $tblName
+            columns    = $cols
+            lineageTag = [guid]::NewGuid().ToString()
+            partitions = @(@{
+                name   = $tblName
+                mode   = 'import'
+                source = @{ type = 'm'; expression = $mLines }
+            })
+        })
+    }
+
+    # Relationships (SubscriptionId links)
+    $rels = @()
+    $tblNames = $modelTables | ForEach-Object { $_.name }
+    $subIdTables = @('Budgets','OrphanedResources','AHBOpportunities')
+    foreach ($ft in $subIdTables) {
+        if ($ft -in $tblNames -and 'SubscriptionCosts' -in $tblNames) {
+            $rels += @{
+                name       = [guid]::NewGuid().ToString()
+                fromTable  = $ft
+                fromColumn = 'SubscriptionId'
+                toTable    = 'SubscriptionCosts'
+                toColumn   = 'SubscriptionId'
+            }
+        }
+    }
+
+    # Build DataModelSchema
+    $schema = @{
+        name               = 'Model'
+        compatibilityLevel = 1550
+        model              = @{
+            culture                         = 'en-US'
+            defaultPowerBIDataSourceVersion = 'powerBI_V3'
+            tables                          = @($modelTables)
+            relationships                   = $rels
+        }
+    }
+    $modelJson = $schema | ConvertTo-Json -Depth 20
+
+    # Create .pbit ZIP
+    $pbitPath = Join-Path $exportDir 'FinOps-Report.pbit'
+    $zip = [System.IO.Compression.ZipFile]::Open($pbitPath, [System.IO.Compression.ZipArchiveMode]::Create)
+
+    try {
+        # [Content_Types].xml
+        $ctEntry = $zip.CreateEntry('[Content_Types].xml')
+        $sw = [System.IO.StreamWriter]::new($ctEntry.Open(), [System.Text.Encoding]::UTF8)
+        $sw.Write('<?xml version="1.0" encoding="utf-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="json" ContentType="application/json"/></Types>')
+        $sw.Close()
+
+        # DataModelSchema (UTF-16LE with BOM)
+        $dmEntry = $zip.CreateEntry('DataModelSchema')
+        $dmStream = $dmEntry.Open()
+        $enc = [System.Text.Encoding]::Unicode
+        $bom = $enc.GetPreamble()
+        $dmBytes = $enc.GetBytes($modelJson)
+        $dmStream.Write($bom, 0, $bom.Length)
+        $dmStream.Write($dmBytes, 0, $dmBytes.Length)
+        $dmStream.Close()
+
+        # DiagramLayout
+        $dlEntry = $zip.CreateEntry('DiagramLayout')
+        $sw2 = [System.IO.StreamWriter]::new($dlEntry.Open(), [System.Text.Encoding]::UTF8)
+        $sw2.Write('{"diagrams":[]}')
+        $sw2.Close()
+
+        # Metadata
+        $mdEntry = $zip.CreateEntry('Metadata')
+        $sw3 = [System.IO.StreamWriter]::new($mdEntry.Open(), [System.Text.Encoding]::UTF8)
+        $sw3.Write('{"version":"1.0","creator":"Azure FinOps Multitool"}')
+        $sw3.Close()
+
+        # SecurityBindings (empty)
+        $sbEntry = $zip.CreateEntry('SecurityBindings')
+        $sbEntry.Open().Close()
+
+        # Version
+        $vEntry = $zip.CreateEntry('Version')
+        $sw4 = [System.IO.StreamWriter]::new($vEntry.Open(), [System.Text.Encoding]::UTF8)
+        $sw4.Write('1.0')
+        $sw4.Close()
+    } finally {
+        $zip.Dispose()
+    }
+
+    $csvCount = $csvFiles.Count
+    Update-UIStatus "Power BI export: $csvCount CSVs + template saved to $exportDir" $script:ProgressBar.Value
+    [System.Windows.MessageBox]::Show("Exported $csvCount CSVs + Power BI template to:`n$exportDir`n`nOpen FinOps-Report.pbit in Power BI Desktop.`nThe CsvFolderPath parameter is pre-set to this folder.", 'Power BI Export', 'OK', 'Information')
 }
 
 # -- Export Function ----------------------------------------------------
 function Export-ScanReport {
+    param([string]$Format)
     $d = $script:scanData
-    $dlg = [Microsoft.Win32.SaveFileDialog]::new()
-    $dlg.Filter = "HTML Report (*.html)|*.html|CSV File (*.csv)|*.csv"
-    $dlg.FileName = "FinOps-Report-$(Get-Date -Format 'yyyy-MM-dd')"
-    $dlg.FilterIndex = 1
 
-    if ($dlg.ShowDialog() -ne $true) { return }
+    if ($Format -eq 'CSV') {
+        $dlg = [Microsoft.Win32.SaveFileDialog]::new()
+        $dlg.Filter = "CSV File (*.csv)|*.csv"
+        $dlg.FileName = "FinOps-Report-$(Get-Date -Format 'yyyy-MM-dd')"
+        if ($dlg.ShowDialog() -ne $true) { return }
+        $path = $dlg.FileName
+    } elseif ($Format -eq 'HTML') {
+        $dlg = [Microsoft.Win32.SaveFileDialog]::new()
+        $dlg.Filter = "HTML Report (*.html)|*.html"
+        $dlg.FileName = "FinOps-Report-$(Get-Date -Format 'yyyy-MM-dd')"
+        if ($dlg.ShowDialog() -ne $true) { return }
+        $path = $dlg.FileName
+    } else {
+        # Legacy fallback — combined dialog
+        $dlg = [Microsoft.Win32.SaveFileDialog]::new()
+        $dlg.Filter = "HTML Report (*.html)|*.html|CSV File (*.csv)|*.csv"
+        $dlg.FileName = "FinOps-Report-$(Get-Date -Format 'yyyy-MM-dd')"
+        $dlg.FilterIndex = 1
+        if ($dlg.ShowDialog() -ne $true) { return }
+        $path = $dlg.FileName
+    }
     $path = $dlg.FileName
 
     if ($path -match '\.csv$') {
@@ -3904,7 +4123,6 @@ $script:scanStages = @(
     }}
     @{ Label = 'Scan complete!';                       Pct = 100; Action = {
         $script:ExportButton.IsEnabled = $true
-        $script:PowerBIExportButton.IsEnabled = $true
     }}
 )
 
@@ -4019,14 +4237,9 @@ $script:GovTenantButton.Add_Click({
     $script:ScanButton.IsEnabled = $true
 })
 
-# Export Button
+# Export Button — show export format chooser dialog
 $script:ExportButton.Add_Click({
-    Export-ScanReport
-})
-
-# Power BI Export Button
-$script:PowerBIExportButton.Add_Click({
-    Export-PowerBIData
+    Show-ExportDialog
 })
 
 # Budget Tab - Subscription Selector
