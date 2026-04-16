@@ -305,7 +305,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton',
+    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',

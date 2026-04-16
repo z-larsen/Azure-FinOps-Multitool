@@ -100,12 +100,28 @@
     <DockPanel>
 
         <!-- Header Bar ============================================== -->
-        <Border DockPanel.Dock="Top" Background="#0078D4" Padding="16,10">
+        <Border DockPanel.Dock="Top" Padding="16,10,16,10">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                    <GradientStop Color="#005BA1" Offset="0"/>
+                    <GradientStop Color="#0078D4" Offset="0.4"/>
+                    <GradientStop Color="#2B88D8" Offset="1"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.Effect>
+                <DropShadowEffect ShadowDepth="2" BlurRadius="6" Opacity="0.3" Direction="270"/>
+            </Border.Effect>
             <DockPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="&#9729;" FontSize="24" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBlock Text="Azure FinOps Multitool" FontSize="20" Foreground="White" FontWeight="Bold" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center" Margin="16,3,0,0"/>
+                    <Border Background="#FFFFFF" CornerRadius="6" Width="36" Height="36" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <TextBlock Text="&#9729;" FontSize="20" Foreground="#0078D4" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
+                        <TextBlock x:Name="VersionLabel" Text="v1.9.6" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                    </StackPanel>
+                    <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
+                    <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" DockPanel.Dock="Right">
                     <Button x:Name="TenantButton" Content="&#x1F513; Commercial Tenant" Style="{StaticResource AzureButton}"
