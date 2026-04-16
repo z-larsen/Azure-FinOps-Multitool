@@ -1,42 +1,17 @@
 
 # AZURE FINOPS MULTITOOL
 
+![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
+![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
+![License MIT](https://img.shields.io/badge/License-MIT-green)
+![Version 1.7.0](https://img.shields.io/badge/Version-1.7.0-brightgreen)
+
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
 opportunities, and FinOps maturity — organized around the three FinOps
 pillars: **Understand**, **Quantify**, and **Optimize**.
 
-A lightweight, read‑only scanner designed to complement the Microsoft FinOps Toolkit. It does not replace Cost Management, FinOps Hubs, or Power BI starter kits. Instead, it helps practitioners quickly identify gaps, validate assumptions, and accelerate conversations during FinOps workshops and scoping engagements.
----
-
-## Screenshots
-
-### Choose Tenant — Multi-Tenant Picker
-![Choose Tenant](screenshots/chooseTenant.png)
-
-### Overview — Cost Summary, Budget Status & Subscription Scorecard
-![Overview](screenshots/overview.png)
-
-### Cost Analysis — 6-Month Trend, Anomalies & Cost by Tag
-![Cost Analysis](screenshots/cost%20analysis.png)
-
-### Tags — Inventory & CAF Compliance
-![Tags](screenshots/tags.png)
-
-### Policy — Azure Policy Inventory, Compliance & FinOps Policy Deployment
-![Policy](screenshots/policy.png)
-
-### Optimization — Commitments, Orphaned Resources, AHB, RI/SP, Advisor
-![Optimization](screenshots/optimization.png)
-
-### Billing — Accounts, Profiles, Invoice Sections, Cost Allocation
-![Billing](screenshots/billing.png)
-
-### FinOps Guidance — Maturity Assessment
-![FinOps Guidance](screenshots/finops-guidance.png)
-
-### Export Report
-![Export Report](screenshots/report.png)
+A lightweight, read‑only scanner intended for use alongside native Azure Cost Management capabilities and community FinOps tooling. It does not replace Cost Management, FinOps Hubs, or Power BI starter kits. Instead, it helps practitioners quickly identify gaps, validate assumptions, and accelerate conversations during FinOps workshops and scoping engagements.
 
 ---
 
@@ -125,9 +100,23 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 ## Quick Start
 
 ```powershell
+# If downloaded from GitHub, unblock the files first:
+Get-ChildItem -Path .\AzureFinOpsMultitool -Recurse | Unblock-File
+
+# Set execution policy if needed (current user only):
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
 cd AzureFinOpsMultitool
 .\Start-FinOpsMultitool.ps1
 ```
+
+**Alternative — run with bypass (no policy change required):**
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Start-FinOpsMultitool.ps1
+```
+
+> **"Not digitally signed" error?** Windows marks downloaded files as blocked.
+> Run `Unblock-File` on the extracted folder, or use the `-ExecutionPolicy Bypass` command above, or right-click the `.ps1` file → Properties → check **Unblock**.
 
 1. The WPF window opens (no authentication yet)
 2. Click **Commercial Tenant** (or **Gov Tenant** for Azure Government) — a browser login opens; after sign-in, a
@@ -458,13 +447,57 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 
 ---
 
+## Changelog
+
+### v1.7.0
+- **Cross-environment tenant discovery** — The tenant picker now probes both Azure Commercial and Azure Government, so customers with tenants in both environments see all of them in one list labeled `[Commercial]` or `[GOV]`
+
+### v1.6.1
+- **Smoother first-run experience** — Quick Start now includes `Unblock-File` and `Set-ExecutionPolicy` steps so downloaded ZIP extracts run without the "not digitally signed" error
+
+### v1.6.0
+- **Tenant-scoped billing** — Billing account queries are now filtered to the selected tenant's subscriptions, ensuring multi-tenant practitioners only see billing data relevant to the current scan
+
+### v1.5.1
+- **Streamlined policy recommendations** — Removed the deprecated "Audit VMs that do not use managed disks" policy, keeping the recommendation list focused on high-impact, modern governance controls
+
+### v1.5.0
+- **Initial public release** — Full 21-stage tenant scan with cost analysis, tag compliance, policy evaluation, optimization recommendations, and FinOps maturity scoring
+- **CAF-aligned tagging** — 7 Cloud Adoption Framework allocation tags with weighted compliance scoring
+- **FinOps Maturity Score** — 0–100 composite score across Visibility, Allocation, Budgeting, Optimization, and Governance
+- **Commitment-aware scanning** — Automatically skips RI/SP savings queries when no active commitments are detected, reducing unnecessary API calls
+- **Dynamic resource threshold** — Intelligent filtering surfaces the most cost-significant resources based on total tenant spend
+- **Multi-cloud support** — Auto-detects Azure Commercial and Azure Government environments
+- **Policy deployment** — Deploy FinOps-aligned Azure Policy assignments directly from the GUI
+- **Tag deployment** — Apply missing tags to resources and resource groups without leaving the tool
+- **HTML & CSV export** — Full scan report export for offline review and stakeholder sharing
+
+---
+
 ## Author
 
-Built by **Zac Larsen**, Cloud Solution Architect @ Microsoft.
+**Zac Larsen** — Personal project (not an official Microsoft product)
 
-Developed from real-world FinOps customer engagements to solve the gap between "we know we need FinOps" and "we have actionable visibility today." Designed as a complement to the Azure FinOps Toolkit.
+---
 
-Questions, feedback, and contributions welcome.
+## Support & Responsible Use
+
+This tool queries only public Azure APIs (Cost Management, Resource Graph, Advisor, Billing) against **your own Azure subscriptions**. It reads subscription metadata (such as subscription IDs/names, regions, budgets, and usage) and writes results locally (console output and HTML/CSV exports); it does **not** transmit this data off your machine except as required to call Azure APIs.
+
+- **Issues & PRs:** Welcome! Please do not include subscription IDs, tenant IDs, internal URLs, or any confidential information.
+- **Azure support:** For Azure platform issues or outages, contact [Azure Support](https://azure.microsoft.com/support/) — not this repository.
+- **Exported files:** Review HTML/CSV exports before sharing externally — they may contain subscription IDs, region information, budgets, and usage details for your environment.
+
+This project may access or process Azure Cost Management, Policy, Resource Graph, or Subscription metadata through Azure APIs.
+
+Execution of this tool may initiate:
+- Resource discovery
+- Policy evaluation
+- Cost data queries
+- Tagging analysis
+- Configuration inspection
+
+Ensure that least‑privilege access is used when running this utility.
 
 ---
 
@@ -477,3 +510,28 @@ Questions, feedback, and contributions welcome.
 - [Azure Advisor](https://learn.microsoft.com/en-us/azure/advisor/)
 - [Azure Hybrid Benefit](https://learn.microsoft.com/en-us/azure/azure-sql/azure-hybrid-benefit)
 - [Reservation Recommendations](https://learn.microsoft.com/en-us/azure/cost-management-billing/reservations/)
+
+---
+
+## OSS Project Disclaimer
+
+This repository contains sample tooling developed by a Microsoft employee and is provided for informational and educational purposes only.
+
+**This is not an official Microsoft product, service, or supported offering.**
+
+This project is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO:
+
+- Production readiness
+- Security hardening
+- Tenant compatibility
+- Governance alignment
+- Cost optimization outcome guarantees
+- Policy compliance assurance
+
+Microsoft does not provide support for this project under any Microsoft support agreement, Premier/Unified Support plan, or Azure support contract.
+
+No Microsoft service level agreements (SLAs), warranties, or product commitments apply to this repository or any derivative use of its contents.
+
+Execution of this tool within an Azure tenant may result in configuration, cost visibility, tagging analysis, governance evaluation, or policy‑related outcomes depending on permissions granted.
+
+Users are solely responsible for validating all scripts and automation prior to execution in production environments.
