@@ -24,6 +24,7 @@ function Get-TagInventory {
         Write-Host "  Scanning tag inventory via Resource Graph..." -ForegroundColor Cyan
         $tagQuery = @"
 resources
+| union resourcecontainers
 | mvexpand tags
 | extend tagName = tostring(bag_keys(tags)[0])
 | extend tagValue = tostring(tags[tagName])
@@ -140,6 +141,7 @@ resources
 
         $locQuery = @"
 resources
+| union resourcecontainers
 | mvexpand tags
 | extend tagName = tostring(bag_keys(tags)[0])
 | where isnotempty(tagName)

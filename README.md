@@ -70,13 +70,15 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 | **Orphaned Resources** | Azure Resource Graph (6 KQL queries) | Orphaned disks, unattached IPs/NICs, deallocated VMs, empty ASPs, old snapshots — with per-resource Cost (MTD) and Est. Annual waste |
 | **RI / SP**         | Advisor + Reservation Recs API    | RI and SP recs with Actual (MTD), Forecast, and savings    |
 | **Advisor**         | Azure Advisor (Cost category)     | Rightsize, shutdown, delete, modernize recs with cost data |
-| **Budget Status**   | Consumption Budgets API           | Budget vs actual per subscription, % used, risk level      |
+| **Budget Status**   | Consumption Budgets API           | Budget vs actual per subscription, % used, risk level; deploy budgets with up to 4 custom thresholds (Actual/Forecasted) |
 | **Savings Realized** | Cost Management (ActualCost + AmortizedCost) | Monthly savings from existing RIs, Savings Plans, and AHB |
-| **Scorecard**       | All of the above                  | Per-subscription health: cost, tags, optimizations, budget, trend |
+| **Scorecard**       | All of the above                  | Per-subscription health: cost, tags, optimizations, orphan savings, budget, trend |
 | **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against 7 CAF allocation tags (CostCenter, BusinessUnit, ApplicationName, WorkloadName, OpsTeam, Criticality, DataClassification) with deployment location |
 | **Policy Inventory** | ARM Policy Assignment API + Resource Graph | All effective policy and initiative assignments including MG-inherited, with compliance state |
 | **Policy Recs**     | CAF-aligned built-in policies & initiatives | Missing cost, tagging, security, and monitoring policies with deploy-from-GUI capability |
 | **Policy Deploy**   | ARM Policy Assignment API (PUT)   | Deploy recommended policies with desired effect (Audit/Deny/etc.) |
+| **Policy Remediation** | Policy Insights API (2021-10-01) | Trigger remediation tasks for DeployIfNotExists/Modify policy assignments |
+| **Budget Policy**   | ARM Policy Assignment API (PUT)   | Deploy budget enforcement policies (AuditIfNotExists / DeployIfNotExists) at subscription or MG scope |
 | **Billing**         | Billing Accounts/Profiles API     | Billing accounts, profiles, invoice sections, EA depts     |
 | **Cost Allocation** | Cost Management Allocation API    | Existing cost allocation rules with source/target counts   |
 | **FinOps Guidance** | All of the above                  | FinOps Maturity Score (0-100) with weighted category breakdown and actionable advice |
@@ -114,9 +116,9 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
    > the data it can't access and shows warnings. Write permissions are
    > only needed if you click the deploy buttons on the Tags or Policy tabs.
 
-4. **Azure Government** — fully supported. the tool auto-detects
-   `AzureCloud` vs `AzureUSGovernment` from your existing session, or
-   prompts you to choose if no session exists.
+4. **Azure Government** — fully supported. Use the **Gov Tenant**
+   button to authenticate against `AzureUSGovernment`; use the
+   **Commercial Tenant** button for standard `AzureCloud` tenants.
 
 ---
 
@@ -128,23 +130,23 @@ cd AzureFinOpsMultitool
 ```
 
 1. The WPF window opens (no authentication yet)
-2. Click **Choose Tenant** — a browser login opens; after sign-in, a
+2. Click **Commercial Tenant** (or **Gov Tenant** for Azure Government) — a browser login opens; after sign-in, a
    tenant picker dialog lists all accessible tenants
 3. Select a tenant and click **Select**
-4. Click **Scan Tenant** — the tool runs through 21 data-collection
+4. Click **Scan** — the tool runs through 21 data-collection
    stages with a progress bar
 5. When done, browse the tabs:
-   - **Overview** — cost summary cards, savings realized, budget status, subscription cost table, top resources by spend, subscription scorecard
+   - **Overview** — cost summary cards, savings realized, budget status, subscription cost table (with orphan savings), top resources by spend, subscription scorecard
    - **Cost Analysis** -- 6-month cost trend bar chart, cost anomaly flags (25%+ MoM change), pick a tag from the dropdown to see spend by tag value
    - **Tags** -- tag inventory with unique values, coverage %, CAF compliance check, clickable missing tag buttons to deploy tags directly to subscriptions/RGs
-   - **Policy** -- policy and initiative assignment inventory, compliance %, CAF-recommended policies and initiatives, clickable buttons to deploy policies with desired effect
+   - **Policy** -- policy and initiative assignment inventory, compliance %, CAF-recommended policies and initiatives, clickable buttons to deploy policies with desired effect, remediation tasks for DINE/Modify policies
    - **Optimization** -- commitment utilization (RI/SP %), orphaned/idle resources with cost data and estimated annual waste, AHB gaps, RI recs, SP recs, Advisor recs
    - **Billing** -- billing accounts, billing profiles (MCA), invoice sections, EA departments, cost allocation rules
    - **FinOps Guidance** — pillar-by-pillar assessment with selectable/copyable references
 
-> The Choose Tenant button shows a lock icon: unlocked while choosing, locked once connected.
+> The Commercial Tenant / Gov Tenant buttons show a lock icon: unlocked while choosing, locked once connected.
 6. Click **Export Report** to save as CSV or HTML
-7. Click **Choose Tenant** again any time to switch tenants without restarting
+7. Click **Commercial Tenant** or **Gov Tenant** again any time to switch tenants without restarting
 
 ---
 
@@ -246,8 +248,8 @@ a `DispatcherTimer` so the UI updates between stages.
 | Fallback on every module | If an API fails (RBAC, throttling), the scan continues gracefully |
 | UTF-8 BOM on all .ps1 files | Ensures PS 5.1 reads special characters correctly |
 | 100% ASCII XAML | All non-ASCII replaced with XML entities to avoid WPF encoding issues |
-| Auto-detect Azure environment | Supports both Commercial and Azure Government without config changes |
-| Separate Choose Tenant / Scan buttons | Auth happens once via Choose Tenant; scan is repeatable without re-auth |
+| Explicit Azure environment buttons | Separate Commercial Tenant / Gov Tenant buttons — no auto-probing of Gov endpoints |
+| Separate tenant / Scan buttons | Auth happens once via Commercial Tenant or Gov Tenant; scan is repeatable without re-auth |
 | WPF minimize during browser auth | MSAL browser login needs the foreground; scanner minimizes then restores |
 | Tenant picker dialog | WPF ListBox shows all accessible tenants; supports 30+ tenants cleanly |
 | LoginExperienceV2 suppressed | `$env:AZURE_LOGIN_EXPERIENCE_V2=Off` prevents Az.Accounts 12+ console subscription picker |
@@ -256,6 +258,12 @@ a `DispatcherTimer` so the UI updates between stages.
 | Pure WPF bar chart | Cost trend drawn with Canvas + Rectangles — no NuGet charting libraries needed |
 | Tag deployment via ARM Tags API | PATCH merge preserves existing tags; only adds/updates the target tag |
 | Policy deployment via ARM PUT | Deploy recommended FinOps policies with user-selected effect (Audit/Deny/etc.) |
+| Policy remediation via REST | Trigger remediation tasks for DeployIfNotExists/Modify assignments via Policy Insights API (2021-10-01) |
+| Budget policy deployment | Deploy budget enforcement policies (AuditIfNotExists / DeployIfNotExists) at subscription or MG scope from the Budgets tab |
+| User-defined budget thresholds | Budget deploy supports up to 4 threshold entries with Actual/Forecasted type selectors |
+| Dev/Test subscription inclusion | Dev/Test subscriptions are no longer skipped during scanning |
+| Tag inventory includes resourcecontainers | Resource Graph tag queries union the `resourcecontainers` table to capture subscription and resource-group-level tags |
+| Orphan savings in scorecard | Subscription scorecard and cost table include an Orphan Savings column showing estimated annual waste from orphaned resources |
 | Lazy scope loading for tag deploy | Subscription/RG list fetched on first tag deploy click, cached for session |
 | Background runspace for tag deploy | Tag deployment runs in a background runspace with 30s timeout; UI stays responsive via DispatcherFrame polling |
 | MG-scope fail-once flag | First cost module that gets 401/403 at MG scope sets a shared flag; all subsequent modules skip to per-sub instantly instead of retrying |
@@ -371,6 +379,13 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 - [x] ~~Non-priority tag backfill~~ — Cost-by-tag auto-discovers additional tags beyond the priority list (up to 5 total)
 - [x] ~~CAF allocation tag alignment~~ — Tag list, cost-by-tag, and scoring all aligned to 7 CAF allocation tags with weighted maturity scoring
 - [x] ~~Commitment-aware savings skip~~ — SavingsRealized skips Cost Management queries when no RIs/SPs exist (stage 10 data reuse)
+- [x] ~~Separate Commercial / Gov tenant buttons~~ — Explicit environment selection; Gov cloud is opt-in, no longer auto-probed
+- [x] ~~User-defined budget thresholds~~ — Deploy budgets with up to 4 custom thresholds (Actual/Forecasted type per threshold)
+- [x] ~~Budget policy deployment~~ — Deploy budget enforcement policies (AuditIfNotExists / DeployIfNotExists) from the Budgets tab
+- [x] ~~Policy remediation tasks~~ — Trigger remediation for DeployIfNotExists/Modify policy assignments from the Policy tab
+- [x] ~~Orphan savings in scorecard~~ — Subscription scorecard and cost table show estimated annual waste from orphaned resources
+- [x] ~~Tag inventory includes subscription/RG-level tags~~ — Resource Graph queries union `resourcecontainers` table
+- [x] ~~Dev/Test subscription inclusion~~ — Dev/Test subs are no longer excluded from scans
 
 ---
 

@@ -305,7 +305,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'TenantButton', 'ScanButton', 'ExportButton',
+    'TenantLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
@@ -336,6 +336,18 @@ $controls = @(
     # Billing
     'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
+    # Budgets Tab
+    'BudgetSubSelector', 'BudgetSubSummary', 'BudgetDetailGrid',
+    'BudgetDeployPanel', 'BudgetDeployScopeSelector',
+    'BudgetDeployNameInput', 'BudgetDeployAmountInput', 'BudgetDeployGrainSelector',
+    'BudgetDeployEmailInput',
+    'BudgetThreshold1', 'BudgetThreshold1Type',
+    'BudgetThreshold2', 'BudgetThreshold2Type',
+    'BudgetThreshold3', 'BudgetThreshold3Type',
+    'BudgetThreshold4', 'BudgetThreshold4Type',
+    'BudgetDeployButton', 'BudgetDeployCancelButton', 'BudgetDeployStatus',
+    'BudgetPolicyPanel', 'BudgetPolicyEffectSelector', 'BudgetPolicyScopeSelector',
+    'BudgetPolicyDeployButton', 'BudgetPolicyCancelButton', 'BudgetPolicyStatus',
     # Guidance
     'GuidanceScorePanel', 'ActionPlanSubtitle', 'ActionPlanPanel',
     'UnderstandPanel', 'QuantifyPanel', 'OptimizePanel',
@@ -346,7 +358,7 @@ $controls = @(
     'PolicyRecsComplianceText', 'PolicyRecsGrid', 'MissingPolicyButtons',
     'PolicyDeployPanel', 'PolicyDeployTitle', 'PolicyScopeSelector',
     'PolicyEffectSelector', 'PolicyParamsPanel', 'PolicyDeployButton',
-    'PolicyDeployCancelButton', 'PolicyDeployStatus'
+    'PolicyRemediateButton', 'PolicyDeployCancelButton', 'PolicyDeployStatus'
 )
 
 foreach ($name in $controls) {
@@ -520,12 +532,38 @@ function Populate-OverviewTab {
     foreach ($sub in $d.Auth.Subscriptions) {
         $c = if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id] } else { @{ Actual = 0; Forecast = 0; Currency = 'USD' } }
         $pct = if ($totalSubActual -gt 0) { [math]::Round(($c.Actual / $totalSubActual) * 100, 2) } else { 0 }
+
+        # Estimate orphan savings for this sub
+        $orphanSave = 0.0
+        if ($d.Orphans -and $d.Orphans.Orphans) {
+            $subOrphans = @($d.Orphans.Orphans | Where-Object { $_.SubscriptionId -eq $sub.Id })
+            foreach ($o in $subOrphans) {
+                $orphanSave += switch ($o.Category) {
+                    'Orphaned Disk'          {
+                        $diskGb = 0
+                        if ($o.Detail -match '(\d+)\s*GB') { $diskGb = [int]$Matches[1] }
+                        if ($o.Detail -match 'Premium')    { $diskGb * 0.12 }
+                        elseif ($o.Detail -match 'Standard_SSD') { $diskGb * 0.075 }
+                        else { $diskGb * 0.04 }
+                    }
+                    'Unattached Public IP'   { 3.65 }
+                    'Unattached NIC'         { 0 }
+                    'Deallocated VM'         { 15 }
+                    'Empty App Service Plan' { 55 }
+                    'Old Snapshot'           { 5 }
+                    default                  { 5 }
+                }
+            }
+        }
+        $sym = Get-CurrencySymbol $c.Currency
+
         [void]$subRows.Add([PSCustomObject]@{
-            Subscription   = $sub.Name
-            'Actual (MTD)' = $c.Actual.ToString('N2')
-            'Forecast'     = $c.Forecast.ToString('N2')
-            '% of Total'   = "$pct%"
-            Currency       = $c.Currency
+            Subscription         = $sub.Name
+            'Actual (MTD)'       = $c.Actual.ToString('N2')
+            'Forecast'           = $c.Forecast.ToString('N2')
+            '% of Total'         = "$pct%"
+            'Orphan Savings/mo'  = if ($orphanSave -gt 0) { "$sym$([math]::Round($orphanSave, 2).ToString('N2'))" } else { '-' }
+            Currency             = $c.Currency
         })
     }
     $script:SubCostGrid.ItemsSource = @($subRows | Sort-Object { [double]($_.'Actual (MTD)') } -Descending)
@@ -2272,6 +2310,273 @@ function Populate-OrphanedSection {
 }
 
 #-----------------------------------------------------------------------
+# BUDGETS TAB
+#-----------------------------------------------------------------------
+function Populate-BudgetsTab {
+    $d = $script:scanData
+    if (-not $d.Auth -or -not $d.Auth.Subscriptions) { return }
+
+    # Populate subscription dropdown
+    $script:BudgetSubSelector.Items.Clear()
+    $script:BudgetSubSelector.Items.Add('All Subscriptions') | Out-Null
+    foreach ($sub in $d.Auth.Subscriptions) {
+        $script:BudgetSubSelector.Items.Add($sub.Name) | Out-Null
+    }
+    $script:BudgetSubSelector.SelectedIndex = 0
+
+    # Populate budget policy scope selector
+    $script:BudgetPolicyScopeSelector.Items.Clear()
+    foreach ($sub in $d.Auth.Subscriptions) {
+        $script:BudgetPolicyScopeSelector.Items.Add("[Sub] $($sub.Name)") | Out-Null
+    }
+    if ($d.Auth.Subscriptions.Count -gt 0) {
+        $script:BudgetPolicyScopeSelector.SelectedIndex = 0
+    }
+}
+
+function Update-BudgetDetailView {
+    $d = $script:scanData
+    $selectedName = $script:BudgetSubSelector.SelectedItem
+    if (-not $selectedName -or -not $d.Budgets) {
+        $script:BudgetSubSummary.Text = 'No budget data available. Run a scan first.'
+        return
+    }
+
+    $budgets = $d.Budgets.Budgets
+    if ($selectedName -ne 'All Subscriptions') {
+        $budgets = @($budgets | Where-Object { $_.Subscription -eq $selectedName })
+    }
+
+    if ($budgets.Count -gt 0) {
+        $overBudget = @($budgets | Where-Object { $_.Risk -eq 'Over Budget' }).Count
+        $atRisk = @($budgets | Where-Object { $_.Risk -eq 'At Risk' }).Count
+        $script:BudgetSubSummary.Text = "$($budgets.Count) budget(s) found. $overBudget over budget, $atRisk at risk."
+
+        $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($b in $budgets) {
+            $sym = Get-CurrencySymbol $b.Currency
+            [void]$rows.Add([PSCustomObject]@{
+                Subscription   = $b.Subscription
+                'Budget Name'  = $b.BudgetName
+                'Amount'       = "$sym$(([double]$b.Amount).ToString('N2'))"
+                'Actual Spend' = "$sym$(([double]$b.ActualSpend).ToString('N2'))"
+                '% Used'       = "$($b.PctUsed)%"
+                'Forecast'     = "$sym$(([double]$b.Forecast).ToString('N2'))"
+                'Risk'         = $b.Risk
+                'Time Grain'   = $b.TimeGrain
+                'Thresholds'   = $b.Thresholds
+            })
+        }
+        $script:BudgetDetailGrid.ItemsSource = @($rows | Sort-Object { [double]($_.'% Used' -replace '[^0-9.]','') } -Descending)
+    } else {
+        if ($selectedName -eq 'All Subscriptions') {
+            $script:BudgetSubSummary.Text = "No budgets configured on any subscription. Use the section below to deploy one."
+        } else {
+            $script:BudgetSubSummary.Text = "No budget configured on '$selectedName'. Use the section below to deploy one."
+        }
+        $script:BudgetDetailGrid.ItemsSource = @()
+    }
+}
+
+function Deploy-BudgetFromTab {
+    $d = $script:scanData
+    $scope = $script:BudgetDeployScopeSelector.SelectedItem.Content
+    $budgetName = $script:BudgetDeployNameInput.Text.Trim()
+    $amountText = $script:BudgetDeployAmountInput.Text.Trim()
+    $timeGrain = $script:BudgetDeployGrainSelector.SelectedItem.Content
+    $emails = $script:BudgetDeployEmailInput.Text.Trim()
+
+    if (-not $budgetName) {
+        $script:BudgetDeployStatus.Foreground = '#D83B01'
+        $script:BudgetDeployStatus.Text = 'Budget name is required.'
+        return
+    }
+    if (-not $amountText -or -not [double]::TryParse($amountText, [ref]$null)) {
+        $script:BudgetDeployStatus.Foreground = '#D83B01'
+        $script:BudgetDeployStatus.Text = 'Amount must be a valid number.'
+        return
+    }
+    $amount = [int][double]$amountText
+
+    # Collect user-defined thresholds (up to 4)
+    $thresholds = @()
+    $thresholdControls = @(
+        @{ Value = $script:BudgetThreshold1; Type = $script:BudgetThreshold1Type },
+        @{ Value = $script:BudgetThreshold2; Type = $script:BudgetThreshold2Type },
+        @{ Value = $script:BudgetThreshold3; Type = $script:BudgetThreshold3Type },
+        @{ Value = $script:BudgetThreshold4; Type = $script:BudgetThreshold4Type }
+    )
+    foreach ($tc in $thresholdControls) {
+        $val = $tc.Value.Text.Trim()
+        if ($val -and [double]::TryParse($val, [ref]$null)) {
+            $pct = [double]$val
+            $thresholdType = if ($tc.Type.SelectedItem) { $tc.Type.SelectedItem.Content } else { 'Actual' }
+            $thresholds += @{ Threshold = $pct; ThresholdType = $thresholdType }
+        }
+    }
+
+    if ($thresholds.Count -eq 0) {
+        $script:BudgetDeployStatus.Foreground = '#D83B01'
+        $script:BudgetDeployStatus.Text = 'At least one threshold is required.'
+        return
+    }
+
+    $startDate = (Get-Date -Day 1).ToString('yyyy-MM-01')
+    $endDate = (Get-Date -Day 1).AddYears(1).ToString('yyyy-MM-01')
+
+    $contactEmails = @()
+    if ($emails) { $contactEmails = @($emails -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+    $contactRoles = @('Owner', 'Contributor')
+
+    # Build notifications from user thresholds
+    $notifications = @{}
+    for ($i = 0; $i -lt $thresholds.Count; $i++) {
+        $t = $thresholds[$i]
+        $notifications["NotificationForExceededBudget$($i + 1)"] = @{
+            enabled       = $true
+            operator      = 'GreaterThan'
+            threshold     = $t.Threshold
+            thresholdType = $t.ThresholdType
+            contactEmails = $contactEmails
+            contactRoles  = $contactRoles
+        }
+    }
+
+    $script:BudgetDeployButton.IsEnabled = $false
+    $script:BudgetDeployStatus.Foreground = '#0078D4'
+    $script:BudgetDeployStatus.Text = "Deploying budget '$budgetName'..."
+
+    # Force UI update
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
+    )
+
+    $successCount = 0
+    $failCount = 0
+    $targetSubs = @()
+
+    if ($scope -eq 'Management Group') {
+        $targetSubs = $d.Auth.Subscriptions
+    } else {
+        $selectedName = $script:BudgetSubSelector.SelectedItem
+        if ($selectedName -eq 'All Subscriptions') {
+            $targetSubs = $d.Auth.Subscriptions
+        } else {
+            $targetSubs = @($d.Auth.Subscriptions | Where-Object { $_.Name -eq $selectedName })
+        }
+    }
+
+    foreach ($sub in $targetSubs) {
+        try {
+            $budgetBody = @{
+                properties = @{
+                    category      = 'Cost'
+                    amount        = $amount
+                    timeGrain     = $timeGrain
+                    timePeriod    = @{ startDate = $startDate; endDate = $endDate }
+                    notifications = $notifications
+                }
+            } | ConvertTo-Json -Depth 10
+
+            $budgetPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets/$($budgetName)?api-version=2023-05-01"
+            $resp = Invoke-AzRestMethodWithRetry -Path $budgetPath -Method PUT -Payload $budgetBody
+
+            if ($resp.StatusCode -in @(200, 201)) {
+                $successCount++
+            } else {
+                $failCount++
+                Write-Warning "Budget deploy failed on $($sub.Name): $($resp.StatusCode) $($resp.Content)"
+            }
+        } catch {
+            $failCount++
+            Write-Warning "Budget deploy error on $($sub.Name): $($_.Exception.Message)"
+        }
+    }
+
+    $script:BudgetDeployButton.IsEnabled = $true
+    if ($failCount -eq 0) {
+        $script:BudgetDeployStatus.Foreground = '#107C10'
+        $script:BudgetDeployStatus.Text = "Successfully deployed budget '$budgetName' to $successCount subscription(s) with $($thresholds.Count) threshold(s)."
+    } else {
+        $script:BudgetDeployStatus.Foreground = '#D83B01'
+        $script:BudgetDeployStatus.Text = "Deployed to $successCount sub(s), $failCount failed. Check console for details."
+    }
+}
+
+function Deploy-BudgetPolicyFromTab {
+    $d = $script:scanData
+    $effect = if ($script:BudgetPolicyEffectSelector.SelectedItem) { $script:BudgetPolicyEffectSelector.SelectedItem.Content } else { 'AuditIfNotExists' }
+    $selectedIdx = $script:BudgetPolicyScopeSelector.SelectedIndex
+
+    if ($selectedIdx -lt 0 -or $selectedIdx -ge $d.Auth.Subscriptions.Count) {
+        $script:BudgetPolicyStatus.Foreground = '#D83B01'
+        $script:BudgetPolicyStatus.Text = 'Please select a scope.'
+        return
+    }
+
+    $sub = $d.Auth.Subscriptions[$selectedIdx]
+    $scope = "/subscriptions/$($sub.Id)"
+
+    # Built-in policy: "Budgets should be configured on subscriptions"
+    $policyDefId = '/providers/Microsoft.Authorization/policyDefinitions/b60f1662-afbe-4583-8543-26c9e20fa0ca'
+
+    $script:BudgetPolicyDeployButton.IsEnabled = $false
+    $script:BudgetPolicyStatus.Foreground = '#0078D4'
+    $script:BudgetPolicyStatus.Text = "Deploying budget policy ($effect)..."
+
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
+
+    try {
+        $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $policyDefId `
+            -Effect $effect -DisplayName "Budget Policy ($effect)"
+        if ($result.Success) {
+            $script:BudgetPolicyStatus.Foreground = '#107C10'
+            $script:BudgetPolicyStatus.Text = "Budget policy deployed ($effect) to $($sub.Name)."
+        } else {
+            $script:BudgetPolicyStatus.Foreground = '#D83B01'
+            $script:BudgetPolicyStatus.Text = "Failed: $($result.Message)"
+        }
+    } catch {
+        $script:BudgetPolicyStatus.Foreground = '#D83B01'
+        $script:BudgetPolicyStatus.Text = "Error: $($_.Exception.Message)"
+    }
+    $script:BudgetPolicyDeployButton.IsEnabled = $true
+}
+
+function Start-PolicyRemediation {
+    param(
+        [Parameter(Mandatory)][string]$Scope,
+        [Parameter(Mandatory)][string]$PolicyAssignmentId
+    )
+
+    Write-Host "  Creating remediation task for assignment: $PolicyAssignmentId" -ForegroundColor Cyan
+
+    $remediationName = "remediate-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    $body = @{
+        properties = @{
+            policyAssignmentId = $PolicyAssignmentId
+        }
+    } | ConvertTo-Json -Depth 5
+
+    $remediationPath = "$Scope/providers/Microsoft.PolicyInsights/remediations/$($remediationName)?api-version=2021-10-01"
+
+    try {
+        $resp = Invoke-AzRestMethodWithRetry -Path $remediationPath -Method PUT -Payload $body
+        if ($resp.StatusCode -in @(200, 201)) {
+            Write-Host "    Remediation task '$remediationName' created." -ForegroundColor Green
+            return [PSCustomObject]@{ Success = $true; Message = "Remediation task '$remediationName' created. Check Policy > Remediation in the portal for progress."; Name = $remediationName }
+        } else {
+            $errBody = ($resp.Content | ConvertFrom-Json -ErrorAction SilentlyContinue)
+            $errMsg = if ($errBody.error) { $errBody.error.message } else { "HTTP $($resp.StatusCode)" }
+            return [PSCustomObject]@{ Success = $false; Message = $errMsg }
+        }
+    } catch {
+        return [PSCustomObject]@{ Success = $false; Message = $_.Exception.Message }
+    }
+}
+
+#-----------------------------------------------------------------------
 # SUBSCRIPTION SCORECARD
 #-----------------------------------------------------------------------
 function Populate-Scorecard {
@@ -2306,8 +2611,29 @@ function Populate-Scorecard {
 
         # Orphan count
         $orphanCount = 0
+        $orphanSavings = 0.0
         if ($d.Orphans -and $d.Orphans.Orphans) {
-            $orphanCount = @($d.Orphans.Orphans | Where-Object { $_.SubscriptionId -eq $sub.Id }).Count
+            $subOrphans = @($d.Orphans.Orphans | Where-Object { $_.SubscriptionId -eq $sub.Id })
+            $orphanCount = $subOrphans.Count
+            # Estimate monthly savings per orphan category (conservative Azure pricing)
+            foreach ($o in $subOrphans) {
+                $orphanSavings += switch ($o.Category) {
+                    'Orphaned Disk'          {
+                        # Estimate based on disk size from Detail field
+                        $diskGb = 0
+                        if ($o.Detail -match '(\d+)\s*GB') { $diskGb = [int]$Matches[1] }
+                        if ($o.Detail -match 'Premium')    { $diskGb * 0.12 }    # ~$0.12/GB/mo Premium SSD
+                        elseif ($o.Detail -match 'Standard_SSD') { $diskGb * 0.075 }
+                        else { $diskGb * 0.04 }                                   # Standard HDD
+                    }
+                    'Unattached Public IP'   { 3.65 }    # ~$0.005/hr static IP
+                    'Unattached NIC'         { 0 }       # NICs are free but clutter
+                    'Deallocated VM'         { 15 }      # OS disk + IP costs while deallocated
+                    'Empty App Service Plan' { 55 }      # Basic tier ~$55/mo
+                    'Old Snapshot'           { 5 }       # ~$0.05/GB, typical 100GB
+                    default                  { 5 }
+                }
+            }
         }
 
         # Budget risk
@@ -2338,6 +2664,7 @@ function Populate-Scorecard {
             'Tag Coverage'   = $tagScore
             'Optimizations'  = $optCount
             'Orphaned'       = $orphanCount
+            'Orphan Savings' = if ($orphanSavings -gt 0) { "$sym$([math]::Round($orphanSavings, 2).ToString('N2'))/mo" } else { '-' }
             'Budget Status'  = $budgetRisk
             'Cost Trend'     = $trendDir
         })
@@ -2774,12 +3101,16 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
 $script:scanStages = @(
     @{ Label = 'Verifying tenant context...';         Pct = 5;   Action = {
         if (-not $script:scanData.Auth) {
-            throw "No tenant selected. Click 'Choose Tenant' first."
+            throw "No tenant selected. Click 'Commercial Tenant' or 'Gov Tenant' first."
         }
         $script:MgCostScopeFailed = $false  # Reset MG-scope flag for fresh scan
         $envLabel = $script:scanData.Auth.Environment
         $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
-        $script:TenantButton.Content = "$($script:LockClosed) Choose Tenant"
+        if ($envLabel -eq 'AzureUSGovernment') {
+            $script:GovTenantButton.Content = "$($script:LockClosed) Gov Tenant"
+        } else {
+            $script:TenantButton.Content = "$($script:LockClosed) Commercial Tenant"
+        }
     }}
     @{ Label = 'Loading management group hierarchy...'; Pct = 15;  Action = {
         $script:scanData.Hierarchy = Get-TenantHierarchy -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
@@ -2852,6 +3183,7 @@ $script:scanStages = @(
         try { Populate-OrphanedSection }   catch { Write-Warning "Populate-OrphanedSection failed: $($_.Exception.Message)" }
         try { Populate-OptimizationTab }   catch { Write-Warning "Populate-OptimizationTab failed: $($_.Exception.Message)" }
         try { Populate-BudgetSection }     catch { Write-Warning "Populate-BudgetSection failed: $($_.Exception.Message)" }
+        try { Populate-BudgetsTab }        catch { Write-Warning "Populate-BudgetsTab failed: $($_.Exception.Message)" }
         try { Populate-Scorecard }         catch { Write-Warning "Populate-Scorecard failed: $($_.Exception.Message)" }
         try { Populate-BillingTab }        catch { Write-Warning "Populate-BillingTab failed: $($_.Exception.Message)" }
         try { Populate-GuidanceTab }       catch { Write-Warning "Populate-GuidanceTab failed: $($_.Exception.Message)" }
@@ -2871,6 +3203,8 @@ $script:scanTimer.Add_Tick({
     if ($script:currentStage -ge $script:scanStages.Count) {
         $script:scanTimer.Stop()
         $script:ScanButton.IsEnabled = $true
+        $script:TenantButton.IsEnabled = $true
+        $script:GovTenantButton.IsEnabled = $true
         $script:ScanButton.Content = "Re-Scan"
         return
     }
@@ -2894,6 +3228,8 @@ $script:scanTimer.Add_Tick({
         if (-not $script:scanData.Auth) {
             $script:scanTimer.Stop()
             $script:ScanButton.IsEnabled = $true
+            $script:TenantButton.IsEnabled = $true
+            $script:GovTenantButton.IsEnabled = $true
             $script:ScanButton.Content = "Retry Scan"
             $script:StatusText.Text = "Scan aborted: $($_.Exception.Message)"
             $script:ProgressBar.Value = 0
@@ -2912,6 +3248,7 @@ $script:scanTimer.Add_Tick({
 $script:ScanButton.Add_Click({
     $script:ScanButton.IsEnabled = $false
     $script:TenantButton.IsEnabled = $false
+    $script:GovTenantButton.IsEnabled = $false
     $script:ExportButton.IsEnabled = $false
     $script:currentStage = 0
     $script:scanTimer.Start()
@@ -2921,32 +3258,89 @@ $script:ScanButton.Add_Click({
 $script:LockOpen   = [char]::ConvertFromUtf32(0x1F513)   # open lock
 $script:LockClosed = [char]::ConvertFromUtf32(0x1F512)   # closed lock
 
-# Choose Tenant Button
+# Choose Commercial Tenant Button
 $script:TenantButton.Add_Click({
     $script:TenantButton.IsEnabled = $false
+    $script:GovTenantButton.IsEnabled = $false
     $script:ScanButton.IsEnabled = $false
     # Show unlocked while choosing
-    $script:TenantButton.Content = "$($script:LockOpen) Choose Tenant"
-    $script:StatusText.Text = 'Choose a tenant...'
+    $script:TenantButton.Content = "$($script:LockOpen) Commercial Tenant"
+    $script:StatusText.Text = 'Connecting to Azure Commercial...'
     try {
-        $script:scanData.Auth = Initialize-Scanner -ParentWindow $window
+        $script:scanData.Auth = Initialize-Scanner -Environment 'AzureCloud' -ParentWindow $window
         $envLabel = $script:scanData.Auth.Environment
         $subCount = $script:scanData.Auth.Subscriptions.Count
         $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
         $tenantSize = if ($script:scanData.Auth.TenantSize) { " [$($script:scanData.Auth.TenantSize)]" } else { '' }
-        $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan Tenant' to begin."
+        $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan' to begin."
         # Show locked after successful selection
-        $script:TenantButton.Content = "$($script:LockClosed) Choose Tenant"
+        $script:TenantButton.Content = "$($script:LockClosed) Commercial Tenant"
     } catch {
         $script:StatusText.Text = "Tenant switch failed: $($_.Exception.Message)"
     }
     $script:TenantButton.IsEnabled = $true
+    $script:GovTenantButton.IsEnabled = $true
+    $script:ScanButton.IsEnabled = $true
+})
+
+# Choose Gov Tenant Button
+$script:GovTenantButton.Add_Click({
+    $script:TenantButton.IsEnabled = $false
+    $script:GovTenantButton.IsEnabled = $false
+    $script:ScanButton.IsEnabled = $false
+    $script:GovTenantButton.Content = "$($script:LockOpen) Gov Tenant"
+    $script:StatusText.Text = 'Connecting to Azure Government...'
+    try {
+        $script:scanData.Auth = Initialize-Scanner -Environment 'AzureUSGovernment' -ParentWindow $window
+        $envLabel = $script:scanData.Auth.Environment
+        $subCount = $script:scanData.Auth.Subscriptions.Count
+        $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
+        $tenantSize = if ($script:scanData.Auth.TenantSize) { " [$($script:scanData.Auth.TenantSize)]" } else { '' }
+        $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan' to begin."
+        $script:GovTenantButton.Content = "$($script:LockClosed) Gov Tenant"
+    } catch {
+        $script:StatusText.Text = "Gov tenant switch failed: $($_.Exception.Message)"
+    }
+    $script:TenantButton.IsEnabled = $true
+    $script:GovTenantButton.IsEnabled = $true
     $script:ScanButton.IsEnabled = $true
 })
 
 # Export Button
 $script:ExportButton.Add_Click({
     Export-ScanReport
+})
+
+# Budget Tab - Subscription Selector
+$script:BudgetSubSelector.Add_SelectionChanged({
+    Update-BudgetDetailView
+})
+
+# Budget Tab - Deploy Button
+$script:BudgetDeployButton.Add_Click({
+    Deploy-BudgetFromTab
+})
+
+# Budget Tab - Cancel Button
+$script:BudgetDeployCancelButton.Add_Click({
+    $script:BudgetDeployNameInput.Text = 'default-budget'
+    $script:BudgetDeployAmountInput.Text = '1000'
+    $script:BudgetDeployEmailInput.Text = ''
+    $script:BudgetThreshold1.Text = ''
+    $script:BudgetThreshold2.Text = ''
+    $script:BudgetThreshold3.Text = ''
+    $script:BudgetThreshold4.Text = ''
+    $script:BudgetDeployStatus.Text = ''
+})
+
+# Budget Policy - Deploy Button
+$script:BudgetPolicyDeployButton.Add_Click({
+    Deploy-BudgetPolicyFromTab
+})
+
+# Budget Policy - Cancel Button
+$script:BudgetPolicyCancelButton.Add_Click({
+    $script:BudgetPolicyStatus.Text = ''
 })
 
 # Tag Selector (Cost Analysis tab)
@@ -3149,20 +3543,61 @@ $script:PolicyDeployButton.Add_Click({
         if ($result.Success) {
             $script:PolicyDeployStatus.Text = "Deployed: $displayName ($effect)"
             $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+            # Show remediation button for effects that support it
+            if ($effect -in @('DeployIfNotExists', 'Modify')) {
+                $script:lastPolicyAssignmentScope = $scope
+                $script:lastPolicyAssignmentId = "$scope/providers/Microsoft.Authorization/policyAssignments/$($result.AssignmentName)"
+                $script:PolicyRemediateButton.Visibility = 'Visible'
+            } else {
+                $script:PolicyRemediateButton.Visibility = 'Collapsed'
+            }
         } else {
             $script:PolicyDeployStatus.Text = "Failed: $($result.Message)"
             $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+            $script:PolicyRemediateButton.Visibility = 'Collapsed'
         }
     } catch {
         $script:PolicyDeployStatus.Text = "Failed: $($_.Exception.Message)"
         $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        $script:PolicyRemediateButton.Visibility = 'Collapsed'
     }
     $script:PolicyDeployButton.IsEnabled = $true
+})
+
+# Policy Remediation Button
+$script:PolicyRemediateButton.Add_Click({
+    if (-not $script:lastPolicyAssignmentId -or -not $script:lastPolicyAssignmentScope) {
+        $script:PolicyDeployStatus.Text = 'No policy assignment to remediate.'
+        return
+    }
+
+    $script:PolicyRemediateButton.IsEnabled = $false
+    $script:PolicyDeployStatus.Text = 'Creating remediation task...'
+    $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
+
+    try {
+        $remResult = Start-PolicyRemediation -Scope $script:lastPolicyAssignmentScope -PolicyAssignmentId $script:lastPolicyAssignmentId
+        if ($remResult.Success) {
+            $script:PolicyDeployStatus.Text = $remResult.Message
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+        } else {
+            $script:PolicyDeployStatus.Text = "Remediation failed: $($remResult.Message)"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        }
+    } catch {
+        $script:PolicyDeployStatus.Text = "Remediation error: $($_.Exception.Message)"
+        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+    }
+    $script:PolicyRemediateButton.IsEnabled = $true
 })
 
 # Policy Deploy Cancel Button
 $script:PolicyDeployCancelButton.Add_Click({
     $script:PolicyDeployPanel.Visibility = 'Collapsed'
+    $script:PolicyRemediateButton.Visibility = 'Collapsed'
     $script:policyDeployCurrentDefId = $null
     $script:policyDeployCurrentName  = $null
 })

@@ -108,9 +108,11 @@
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center" Margin="16,3,0,0"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" DockPanel.Dock="Right">
-                    <Button x:Name="TenantButton" Content="&#x1F513; Choose Tenant" Style="{StaticResource AzureButton}"
+                    <Button x:Name="TenantButton" Content="&#x1F513; Commercial Tenant" Style="{StaticResource AzureButton}"
                             Background="Transparent" Foreground="White" BorderBrush="White" Margin="0,0,8,0"/>
-                    <Button x:Name="ScanButton" Content="&#x26A1; Scan Tenant" Style="{StaticResource AzureButton}"
+                    <Button x:Name="GovTenantButton" Content="&#x1F513; Gov Tenant" Style="{StaticResource AzureButton}"
+                            Background="Transparent" Foreground="White" BorderBrush="#8DC6FF" Margin="0,0,8,0"/>
+                    <Button x:Name="ScanButton" Content="&#x26A1; Scan" Style="{StaticResource AzureButton}"
                             Background="White" Foreground="#0078D4" Margin="0,0,8,0"/>
                     <Button x:Name="ExportButton" Content="&#x1F4CB; Export Report" Style="{StaticResource AzureButton}"
                             Background="Transparent" Foreground="White" BorderBrush="White" IsEnabled="False"/>
@@ -123,7 +125,7 @@
             <DockPanel>
                 <ProgressBar x:Name="ProgressBar" Width="220" Height="14" Minimum="0" Maximum="100" Value="0"
                              Foreground="#0078D4" Background="#E0E0E0" DockPanel.Dock="Right" Margin="10,0,0,0"/>
-                <TextBlock x:Name="StatusText" Text="Click 'Choose Tenant' to connect to Azure" Foreground="#666"
+                <TextBlock x:Name="StatusText" Text="Select 'Commercial Tenant' or 'Gov Tenant' to connect" Foreground="#666"
                            FontSize="12" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
@@ -395,6 +397,8 @@
                                     <StackPanel Orientation="Horizontal">
                                         <Button x:Name="PolicyDeployButton" Content="Deploy Policy" Style="{StaticResource AzureButton}"
                                                 Background="#0078D4" Foreground="White" Margin="0,0,10,0"/>
+                                        <Button x:Name="PolicyRemediateButton" Content="Create Remediation Task" Style="{StaticResource AzureButton}"
+                                                Background="#107C10" Foreground="White" Margin="0,0,10,0" Visibility="Collapsed"/>
                                         <Button x:Name="PolicyDeployCancelButton" Content="Cancel" Style="{StaticResource AzureButton}" Margin="0,0,10,0"/>
                                         <TextBlock x:Name="PolicyDeployStatus" Text="" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"/>
                                     </StackPanel>
@@ -503,6 +507,137 @@
                             <TextBlock Text="Cost Allocation Rules" Style="{StaticResource SectionHeader}"/>
                             <TextBlock Text="Cost allocation rules redistribute shared costs (e.g., networking, management tools) across target subscriptions or resource groups." FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,6"/>
                             <DataGrid x:Name="CostAllocationGrid" MaxHeight="200"/>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Budgets Tab ================================== -->
+                <TabItem Header="  Budgets  " FontSize="13">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                        <StackPanel x:Name="BudgetsPanel">
+
+                            <TextBlock Text="Budget Management" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="0,0,0,4">
+                                Azure Budgets let you set a spending cap for a subscription and receive email alerts when spend crosses defined thresholds.
+                                Budgets do NOT stop spending — they provide visibility so you can act before costs exceed expectations.
+                                Best practice: set thresholds at 25%, 50%, 80%, and 100% so stakeholders get early warnings.
+                            </TextBlock>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#999" Margin="0,0,0,12">
+                                Required permissions: Cost Management Contributor or Contributor role on the target subscription.
+                            </TextBlock>
+
+                            <!-- Subscription Selector -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <TextBlock Text="Subscription:" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox x:Name="BudgetSubSelector" Width="400" FontSize="13"/>
+                            </StackPanel>
+
+                            <!-- Budget Detail for Selected Sub -->
+                            <TextBlock x:Name="BudgetSubSummary" Text="" FontSize="12" Foreground="#666" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                            <DataGrid x:Name="BudgetDetailGrid" MaxHeight="250"/>
+
+                            <!-- Deploy Budget Section -->
+                            <TextBlock Text="Deploy a Budget" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
+                            <StackPanel x:Name="BudgetDeployPanel">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Scope:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <ComboBox x:Name="BudgetDeployScopeSelector" Width="250" FontSize="12">
+                                        <ComboBoxItem Content="Subscription" IsSelected="True"/>
+                                        <ComboBoxItem Content="Management Group"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Budget Name:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <TextBox x:Name="BudgetDeployNameInput" Width="250" FontSize="12" Text="default-budget"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Amount:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <TextBox x:Name="BudgetDeployAmountInput" Width="150" FontSize="12" Text="1000"/>
+                                    <TextBlock Text="  Time Grain:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="16,0,8,0"/>
+                                    <ComboBox x:Name="BudgetDeployGrainSelector" Width="120" FontSize="12">
+                                        <ComboBoxItem Content="Monthly" IsSelected="True"/>
+                                        <ComboBoxItem Content="Quarterly"/>
+                                        <ComboBoxItem Content="Annually"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Alert Emails:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <TextBox x:Name="BudgetDeployEmailInput" Width="400" FontSize="12" Text=""
+                                             ToolTip="Comma-separated email addresses for budget alerts"/>
+                                </StackPanel>
+
+                                <!-- Threshold Inputs (up to 4) -->
+                                <TextBlock Text="Alert Thresholds (%):" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <TextBlock Text="Define up to 4 percentage thresholds. Leave blank to skip. Each threshold sends a notification when spend crosses that percentage of the budget amount."
+                                           FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Threshold 1:" FontSize="12" VerticalAlignment="Center" Width="85"/>
+                                    <TextBox x:Name="BudgetThreshold1" Width="60" FontSize="12" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="BudgetThreshold1Type" Width="110" FontSize="12" Margin="0,0,20,0">
+                                        <ComboBoxItem Content="Actual" IsSelected="True"/>
+                                        <ComboBoxItem Content="Forecasted"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Threshold 2:" FontSize="12" VerticalAlignment="Center" Width="85"/>
+                                    <TextBox x:Name="BudgetThreshold2" Width="60" FontSize="12" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="BudgetThreshold2Type" Width="110" FontSize="12">
+                                        <ComboBoxItem Content="Actual" IsSelected="True"/>
+                                        <ComboBoxItem Content="Forecasted"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Threshold 3:" FontSize="12" VerticalAlignment="Center" Width="85"/>
+                                    <TextBox x:Name="BudgetThreshold3" Width="60" FontSize="12" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="BudgetThreshold3Type" Width="110" FontSize="12" Margin="0,0,20,0">
+                                        <ComboBoxItem Content="Actual" IsSelected="True"/>
+                                        <ComboBoxItem Content="Forecasted"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Threshold 4:" FontSize="12" VerticalAlignment="Center" Width="85"/>
+                                    <TextBox x:Name="BudgetThreshold4" Width="60" FontSize="12" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="BudgetThreshold4Type" Width="110" FontSize="12">
+                                        <ComboBoxItem Content="Actual" IsSelected="True"/>
+                                        <ComboBoxItem Content="Forecasted"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="BudgetDeployButton" Content="Deploy Budget" Style="{StaticResource AzureButton}"
+                                            Background="#0078D4" Foreground="White" Margin="0,0,8,0"/>
+                                    <Button x:Name="BudgetDeployCancelButton" Content="Cancel" Style="{StaticResource AzureButton}"
+                                            Background="White" Foreground="#333" BorderBrush="#CCC"/>
+                                </StackPanel>
+                                <TextBlock x:Name="BudgetDeployStatus" Text="" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+
+                            <!-- Deploy Budget Policy Section -->
+                            <TextBlock Text="Deploy a Budget Policy" Style="{StaticResource SectionHeader}" Margin="0,24,0,0"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="0,0,0,4">
+                                Deploy an Azure Policy that automatically creates budgets on new subscriptions (DeployIfNotExists)
+                                or audits subscriptions that are missing a budget (AuditIfNotExists). Policies enforce governance at scale.
+                            </TextBlock>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#999" Margin="0,0,0,10">
+                                DINE policies require a remediation task for existing subscriptions. Use the button below after deploying.
+                            </TextBlock>
+                            <StackPanel x:Name="BudgetPolicyPanel">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Policy Effect:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <ComboBox x:Name="BudgetPolicyEffectSelector" Width="250" FontSize="12">
+                                        <ComboBoxItem Content="AuditIfNotExists" IsSelected="True"/>
+                                        <ComboBoxItem Content="DeployIfNotExists"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Scope:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <ComboBox x:Name="BudgetPolicyScopeSelector" Width="400" FontSize="12"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="BudgetPolicyDeployButton" Content="Deploy Budget Policy" Style="{StaticResource AzureButton}"
+                                            Background="#0078D4" Foreground="White" Margin="0,0,8,0"/>
+                                    <Button x:Name="BudgetPolicyCancelButton" Content="Cancel" Style="{StaticResource AzureButton}"
+                                            Background="White" Foreground="#333" BorderBrush="#CCC"/>
+                                </StackPanel>
+                                <TextBlock x:Name="BudgetPolicyStatus" Text="" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
 
                         </StackPanel>
                     </ScrollViewer>

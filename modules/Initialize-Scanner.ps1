@@ -80,7 +80,10 @@ function Initialize-Scanner {
         [string]$Environment = '',
 
         [Parameter()]
-        [System.Windows.Window]$ParentWindow
+        [System.Windows.Window]$ParentWindow,
+
+        [Parameter()]
+        [switch]$IncludeAlternateCloud
     )
 
     $requiredModules = @('Az.Accounts', 'Az.Resources', 'Az.ResourceGraph', 'Az.CostManagement', 'Az.Advisor', 'Az.Billing')
@@ -98,19 +101,23 @@ function Initialize-Scanner {
 
     # Check for existing session and auto-detect environment
     $ctx = Get-AzContext -ErrorAction SilentlyContinue
-    if ($ctx -and -not $Environment) {
-        $Environment = $ctx.Environment.Name
-        Write-Host "  Detected Azure environment: $Environment" -ForegroundColor Cyan
-    }
 
-    # Default to AzureCloud if no session and no param
-    if (-not $Environment) { $Environment = 'AzureCloud' }
+    # If caller specified an environment, use it; otherwise detect from session
+    if (-not $Environment) {
+        if ($ctx) {
+            $Environment = $ctx.Environment.Name
+            Write-Host "  Detected Azure environment: $Environment" -ForegroundColor Cyan
+        } else {
+            $Environment = 'AzureCloud'
+        }
+    }
 
     # Disable the new Az login experience subscription picker (Az.Accounts 12+)
     # so Connect-AzAccount goes straight through without console prompts
     $env:AZURE_LOGIN_EXPERIENCE_V2 = 'Off'
 
-    if (-not $ctx) {
+    # Authenticate if no session or if the current session is in a different cloud
+    if (-not $ctx -or $ctx.Environment.Name -ne $Environment) {
         Write-Host "  Authenticating to Azure ($Environment)..." -ForegroundColor Cyan
         # Minimize the scanner window so the browser login can open normally
         if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
@@ -135,26 +142,28 @@ function Initialize-Scanner {
         $seenTenantIds[$t.TenantId] = $true
     }
 
-    # Probe the alternate environment for additional tenants
-    $altEnv = if ($Environment -eq 'AzureCloud') { 'AzureUSGovernment' } else { 'AzureCloud' }
-    try {
-        Write-Host "  Checking $altEnv for additional tenants..." -ForegroundColor Cyan
-        if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
-        Connect-AzAccount -Environment $altEnv -ErrorAction Stop | Out-Null
-        if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
-        $altTenants = @(Get-AzTenant -ErrorAction SilentlyContinue)
-        foreach ($t in $altTenants) {
-            if (-not $seenTenantIds.ContainsKey($t.TenantId)) {
-                $t | Add-Member -NotePropertyName 'Environment' -NotePropertyValue $altEnv -Force
-                $allTenants.Add($t)
-                $seenTenantIds[$t.TenantId] = $true
+    # Probe the alternate environment for additional tenants (opt-in only)
+    if ($IncludeAlternateCloud) {
+        $altEnv = if ($Environment -eq 'AzureCloud') { 'AzureUSGovernment' } else { 'AzureCloud' }
+        try {
+            Write-Host "  Checking $altEnv for additional tenants..." -ForegroundColor Cyan
+            if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
+            Connect-AzAccount -Environment $altEnv -ErrorAction Stop | Out-Null
+            if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
+            $altTenants = @(Get-AzTenant -ErrorAction SilentlyContinue)
+            foreach ($t in $altTenants) {
+                if (-not $seenTenantIds.ContainsKey($t.TenantId)) {
+                    $t | Add-Member -NotePropertyName 'Environment' -NotePropertyValue $altEnv -Force
+                    $allTenants.Add($t)
+                    $seenTenantIds[$t.TenantId] = $true
+                }
             }
+            # Switch back to original environment context
+            Connect-AzAccount -Environment $Environment -ErrorAction SilentlyContinue | Out-Null
+        } catch {
+            Write-Host "  No additional tenants found in $altEnv" -ForegroundColor DarkGray
+            if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
         }
-        # Switch back to original environment context
-        Connect-AzAccount -Environment $Environment -ErrorAction SilentlyContinue | Out-Null
-    } catch {
-        Write-Host "  No additional tenants found in $altEnv" -ForegroundColor DarkGray
-        if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
     }
 
     if ($allTenants.Count -eq 0) {
@@ -195,7 +204,7 @@ function Initialize-Scanner {
     $skippedSubs = [System.Collections.Generic.List[object]]::new()
 
     $skipPatterns = @(
-        'Visual Studio', 'MSDN', 'Dev/Test', 'DevTest',
+        'Visual Studio', 'MSDN',
         'Free Trial', 'Sponsorship', 'Access to Azure Active Directory',
         'Azure Pass', 'BizSpark', 'Imagine', 'MPN', 'Azure in Open'
     )
