@@ -341,7 +341,7 @@ $controls = @(
     'BudgetSubSelector', 'BudgetSubSummary', 'BudgetDetailGrid',
     'BudgetDeployPanel', 'BudgetDeployScopeSelector',
     'BudgetDeployNameInput', 'BudgetDeployAmountInput', 'BudgetDeployGrainSelector',
-    'BudgetDeployEmailInput',
+    'BudgetDeployEmailInput', 'BudgetActionGroupSelector',
     'BudgetThreshold1', 'BudgetThreshold1Type',
     'BudgetThreshold2', 'BudgetThreshold2Type',
     'BudgetThreshold3', 'BudgetThreshold3Type',
@@ -2636,6 +2636,31 @@ function Populate-BudgetsTab {
     }
     $script:BudgetDeployScopeSelector.SelectedIndex = 0
 
+    # Populate Action Group selector
+    $script:BudgetActionGroupSelector.Items.Clear()
+    $noneItem = [System.Windows.Controls.ComboBoxItem]::new()
+    $noneItem.Content = '(None)'
+    $noneItem.Tag = ''
+    $script:BudgetActionGroupSelector.Items.Add($noneItem) | Out-Null
+    foreach ($sub in $d.Auth.Subscriptions) {
+        try {
+            $agPath = "/subscriptions/$($sub.Id)/providers/microsoft.insights/actionGroups?api-version=2023-01-01"
+            $agResp = Invoke-AzRestMethodWithRetry -Path $agPath -Method GET
+            if ($agResp.StatusCode -eq 200) {
+                $ags = ($agResp.Content | ConvertFrom-Json).value
+                foreach ($ag in $ags) {
+                    $agItem = [System.Windows.Controls.ComboBoxItem]::new()
+                    $agItem.Content = "$($ag.name) ($($sub.Name))"
+                    $agItem.Tag = $ag.id
+                    $script:BudgetActionGroupSelector.Items.Add($agItem) | Out-Null
+                }
+            }
+        } catch {
+            Write-Warning "Could not list action groups for $($sub.Name): $($_.Exception.Message)"
+        }
+    }
+    $script:BudgetActionGroupSelector.SelectedIndex = 0
+
     # Populate budget policy scope selector
     $script:BudgetPolicyScopeSelector.Items.Clear()
     foreach ($sub in $d.Auth.Subscriptions) {
@@ -2699,6 +2724,12 @@ function Deploy-BudgetFromTab {
     $timeGrain = $script:BudgetDeployGrainSelector.SelectedItem.Content
     $emails = $script:BudgetDeployEmailInput.Text.Trim()
 
+    # Get selected action group
+    $actionGroupId = ''
+    if ($script:BudgetActionGroupSelector.SelectedItem -and $script:BudgetActionGroupSelector.SelectedItem.Tag) {
+        $actionGroupId = $script:BudgetActionGroupSelector.SelectedItem.Tag
+    }
+
     if (-not $budgetName) {
         $script:BudgetDeployStatus.Foreground = '#D83B01'
         $script:BudgetDeployStatus.Text = 'Budget name is required.'
@@ -2745,7 +2776,7 @@ function Deploy-BudgetFromTab {
     $notifications = @{}
     for ($i = 0; $i -lt $thresholds.Count; $i++) {
         $t = $thresholds[$i]
-        $notifications["NotificationForExceededBudget$($i + 1)"] = @{
+        $notif = @{
             enabled       = $true
             operator      = 'GreaterThan'
             threshold     = $t.Threshold
@@ -2753,6 +2784,10 @@ function Deploy-BudgetFromTab {
             contactEmails = $contactEmails
             contactRoles  = $contactRoles
         }
+        if ($actionGroupId) {
+            $notif['contactGroups'] = @($actionGroupId)
+        }
+        $notifications["NotificationForExceededBudget$($i + 1)"] = $notif
     }
 
     $script:BudgetDeployButton.IsEnabled = $false

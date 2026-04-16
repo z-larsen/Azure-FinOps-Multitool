@@ -118,7 +118,7 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
-                        <TextBlock x:Name="VersionLabel" Text="v1.9.11" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                        <TextBlock x:Name="VersionLabel" Text="v1.9.12" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
                     </StackPanel>
                     <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
@@ -574,6 +574,13 @@
                                     <TextBlock Text="Alert Emails:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
                                     <TextBox x:Name="BudgetDeployEmailInput" Width="400" FontSize="12" Text=""
                                              ToolTip="Comma-separated email addresses for budget alerts"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Action Group:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <ComboBox x:Name="BudgetActionGroupSelector" Width="400" FontSize="12"
+                                              ToolTip="Optional: select an Action Group to trigger when thresholds are crossed">
+                                        <ComboBoxItem Content="(None)" IsSelected="True"/>
+                                    </ComboBox>
                                 </StackPanel>
 
                                 <!-- Threshold Inputs (up to 4) -->
