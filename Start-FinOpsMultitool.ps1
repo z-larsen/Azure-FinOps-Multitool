@@ -709,15 +709,16 @@ function Populate-TagsTab {
         # Action button template column
         $actionCol = [System.Windows.Controls.DataGridTemplateColumn]::new()
         $actionCol.Header = 'Action'
-        $actionCol.Width = 90
+        $actionCol.Width = 75
 
         $cellFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.Button])
         $cellFactory.SetBinding([System.Windows.Controls.Button]::ContentProperty, [System.Windows.Data.Binding]::new('ActionLabel'))
         $cellFactory.SetBinding([System.Windows.Controls.Button]::BackgroundProperty, [System.Windows.Data.Binding]::new('ActionBg'))
         $cellFactory.SetBinding([System.Windows.Controls.Button]::ForegroundProperty, [System.Windows.Data.Binding]::new('ActionFg'))
         $cellFactory.SetBinding([System.Windows.Controls.Button]::TagProperty, [System.Windows.Data.Binding]::new('TagName'))
-        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]11)
-        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(8,3,8,3))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]10)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(6,1,6,1))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::MarginProperty, [System.Windows.Thickness]::new(2,1,2,1))
         $cellFactory.SetValue([System.Windows.Controls.Button]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
         $cellFactory.SetValue([System.Windows.Controls.Button]::BorderThicknessProperty, [System.Windows.Thickness]::new(1))
         $cellFactory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
@@ -1949,13 +1950,14 @@ function Populate-PolicyTab {
         # Unassign button template column
         $actionCol = [System.Windows.Controls.DataGridTemplateColumn]::new()
         $actionCol.Header = 'Action'
-        $actionCol.Width = 90
+        $actionCol.Width = 75
 
         $cellFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.Button])
         $cellFactory.SetValue([System.Windows.Controls.Button]::ContentProperty, 'Unassign')
         $cellFactory.SetBinding([System.Windows.Controls.Button]::TagProperty, [System.Windows.Data.Binding]::new('AssignmentIndex'))
-        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]11)
-        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(8,3,8,3))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]10)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(6,1,6,1))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::MarginProperty, [System.Windows.Thickness]::new(2,1,2,1))
         $cellFactory.SetValue([System.Windows.Controls.Button]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
         $cellFactory.SetValue([System.Windows.Controls.Button]::BackgroundProperty, [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FDE7E9'))
         $cellFactory.SetValue([System.Windows.Controls.Button]::ForegroundProperty, [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D13438'))
@@ -2091,15 +2093,16 @@ function Populate-PolicyTab {
         # Action button template column
         $actionCol = [System.Windows.Controls.DataGridTemplateColumn]::new()
         $actionCol.Header = 'Action'
-        $actionCol.Width = 110
+        $actionCol.Width = 85
 
         $cellFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.Button])
         $cellFactory.SetBinding([System.Windows.Controls.Button]::ContentProperty, [System.Windows.Data.Binding]::new('ActionLabel'))
         $cellFactory.SetBinding([System.Windows.Controls.Button]::BackgroundProperty, [System.Windows.Data.Binding]::new('ActionBg'))
         $cellFactory.SetBinding([System.Windows.Controls.Button]::ForegroundProperty, [System.Windows.Data.Binding]::new('ActionFg'))
         $cellFactory.SetBinding([System.Windows.Controls.Button]::TagProperty, [System.Windows.Data.Binding]::new('PolicyIndex'))
-        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]11)
-        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(8,3,8,3))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]10)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(6,1,6,1))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::MarginProperty, [System.Windows.Thickness]::new(2,1,2,1))
         $cellFactory.SetValue([System.Windows.Controls.Button]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
         $cellFactory.SetValue([System.Windows.Controls.Button]::BorderThicknessProperty, [System.Windows.Thickness]::new(1))
         $cellFactory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
