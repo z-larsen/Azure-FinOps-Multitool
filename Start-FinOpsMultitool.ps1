@@ -2564,13 +2564,26 @@ function Populate-BudgetsTab {
     $d = $script:scanData
     if (-not $d.Auth -or -not $d.Auth.Subscriptions) { return }
 
-    # Populate subscription dropdown
+    # Populate subscription dropdown (for viewing budgets)
     $script:BudgetSubSelector.Items.Clear()
     $script:BudgetSubSelector.Items.Add('All Subscriptions') | Out-Null
     foreach ($sub in $d.Auth.Subscriptions) {
         $script:BudgetSubSelector.Items.Add($sub.Name) | Out-Null
     }
     $script:BudgetSubSelector.SelectedIndex = 0
+
+    # Populate budget deploy scope selector with actual subscriptions
+    $script:BudgetDeployScopeSelector.Items.Clear()
+    $allItem = [System.Windows.Controls.ComboBoxItem]::new()
+    $allItem.Content = 'All Subscriptions'
+    $script:BudgetDeployScopeSelector.Items.Add($allItem) | Out-Null
+    foreach ($sub in $d.Auth.Subscriptions) {
+        $item = [System.Windows.Controls.ComboBoxItem]::new()
+        $item.Content = $sub.Name
+        $item.Tag = $sub.Id
+        $script:BudgetDeployScopeSelector.Items.Add($item) | Out-Null
+    }
+    $script:BudgetDeployScopeSelector.SelectedIndex = 0
 
     # Populate budget policy scope selector
     $script:BudgetPolicyScopeSelector.Items.Clear()
@@ -2629,6 +2642,7 @@ function Update-BudgetDetailView {
 function Deploy-BudgetFromTab {
     $d = $script:scanData
     $scope = $script:BudgetDeployScopeSelector.SelectedItem.Content
+    $scopeSubId = $script:BudgetDeployScopeSelector.SelectedItem.Tag
     $budgetName = $script:BudgetDeployNameInput.Text.Trim()
     $amountText = $script:BudgetDeployAmountInput.Text.Trim()
     $timeGrain = $script:BudgetDeployGrainSelector.SelectedItem.Content
@@ -2703,14 +2717,13 @@ function Deploy-BudgetFromTab {
     $failCount = 0
     $targetSubs = @()
 
-    if ($scope -eq 'Management Group') {
+    if ($scope -eq 'All Subscriptions') {
         $targetSubs = $d.Auth.Subscriptions
     } else {
-        $selectedName = $script:BudgetSubSelector.SelectedItem
-        if ($selectedName -eq 'All Subscriptions') {
-            $targetSubs = $d.Auth.Subscriptions
-        } else {
-            $targetSubs = @($d.Auth.Subscriptions | Where-Object { $_.Name -eq $selectedName })
+        # Specific subscription selected
+        $targetSubs = @($d.Auth.Subscriptions | Where-Object { $_.Id -eq $scopeSubId })
+        if ($targetSubs.Count -eq 0) {
+            $targetSubs = @($d.Auth.Subscriptions | Where-Object { $_.Name -eq $scope })
         }
     }
 

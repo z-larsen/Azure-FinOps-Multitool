@@ -541,9 +541,8 @@
                             <StackPanel x:Name="BudgetDeployPanel">
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                     <TextBlock Text="Scope:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
-                                    <ComboBox x:Name="BudgetDeployScopeSelector" Width="250" FontSize="12">
-                                        <ComboBoxItem Content="Subscription" IsSelected="True"/>
-                                        <ComboBoxItem Content="Management Group"/>
+                                    <ComboBox x:Name="BudgetDeployScopeSelector" Width="400" FontSize="12">
+                                        <ComboBoxItem Content="All Subscriptions" IsSelected="True"/>
                                     </ComboBox>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
