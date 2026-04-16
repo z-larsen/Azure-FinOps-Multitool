@@ -319,7 +319,7 @@ $controls = @(
     'TagCountText', 'TagCoverageText', 'UntaggedCountText',
     'TagInventoryGrid', 'TagComplianceText', 'TagRecsGrid',
     'UntaggedNote', 'UntaggedResourcesGrid',
-    'MissingTagButtons', 'TagDeployPanel', 'TagDeployTitle',
+    'TagDeployPanel', 'TagDeployTitle',
     'TagScopeSelector', 'TagValueInput', 'TagDeployButton',
     'TagDeployCancelButton', 'TagDeployStatus',
     # Overview - Budget & Scorecard
@@ -355,7 +355,7 @@ $controls = @(
     # Policy
     'PolicyCountText', 'PolicyComplianceText', 'PolicyNonCompliantText',
     'PolicyRecsCountText', 'PolicyInventoryGrid', 'PolicyComplianceGrid',
-    'PolicyRecsComplianceText', 'PolicyRecsGrid', 'MissingPolicyButtons',
+    'PolicyRecsComplianceText', 'PolicyRecsGrid',
     'PolicyDeployPanel', 'PolicyDeployTitle', 'PolicyScopeSelector',
     'PolicyEffectSelector', 'PolicyParamsPanel', 'PolicyDeployButton',
     'PolicyRemediateButton', 'PolicyDeployCancelButton', 'PolicyDeployStatus'
@@ -682,20 +682,70 @@ function Populate-TagsTab {
         }
     }
 
-    # Tag recommendations
+    # Tag recommendations with inline action buttons
     if ($d.TagRecs) {
         $presentCount  = $d.TagRecs.Present.Count
         $analysisCount = $d.TagRecs.Analysis.Count
         $script:TagComplianceText.Text = "Tag compliance: $($d.TagRecs.CompliancePercent)% ($presentCount of $analysisCount recommended tags found)"
 
+        # Build the tag recs grid with programmatic columns including an Action button
+        $script:TagRecsGrid.AutoGenerateColumns = $false
+        $script:TagRecsGrid.Columns.Clear()
+
+        # Data columns
+        foreach ($col in @('Tag','Status','Location','Priority','Pillar','Purpose')) {
+            $dgCol = [System.Windows.Controls.DataGridTextColumn]::new()
+            $dgCol.Header = $col
+            $dgCol.Binding = [System.Windows.Data.Binding]::new($col)
+            if ($col -eq 'Purpose') { $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star) }
+            $script:TagRecsGrid.Columns.Add($dgCol)
+        }
+
+        # Action button template column
+        $actionCol = [System.Windows.Controls.DataGridTemplateColumn]::new()
+        $actionCol.Header = 'Action'
+        $actionCol.Width = 90
+
+        $cellFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.Button])
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::ContentProperty, [System.Windows.Data.Binding]::new('ActionLabel'))
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::BackgroundProperty, [System.Windows.Data.Binding]::new('ActionBg'))
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::ForegroundProperty, [System.Windows.Data.Binding]::new('ActionFg'))
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::TagProperty, [System.Windows.Data.Binding]::new('TagName'))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]11)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(8,3,8,3))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::BorderThicknessProperty, [System.Windows.Thickness]::new(1))
+        $cellFactory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
+            param($sender, $e)
+            $tagName = $sender.Tag
+            $status  = $sender.Content
+            if ($status -eq 'Add') {
+                Show-TagDeployPanel -TagName $tagName
+            } elseif ($status -eq 'Remove') {
+                Show-TagRemovePanel -TagName $tagName
+            }
+        })
+
+        $cellTemplate = [System.Windows.DataTemplate]::new()
+        $cellTemplate.VisualTree = $cellFactory
+        $actionCol.CellTemplate = $cellTemplate
+        $script:TagRecsGrid.Columns.Add($actionCol)
+
+        # Populate rows with action metadata
+        $brushConv = [System.Windows.Media.BrushConverter]::new()
         $recRows = $d.TagRecs.Analysis | ForEach-Object {
+            $isMissing = $_.Status -eq 'Missing'
             [PSCustomObject]@{
-                'Tag'       = $_.TagName
-                'Status'    = $_.Status
-                'Location'  = $_.Location
-                'Priority'  = $_.Priority
-                'Pillar'    = $_.Pillar
-                'Purpose'   = $_.Purpose
+                'Tag'         = $_.TagName
+                'TagName'     = $_.TagName
+                'Status'      = $_.Status
+                'Location'    = $_.Location
+                'Priority'    = $_.Priority
+                'Pillar'      = $_.Pillar
+                'Purpose'     = $_.Purpose
+                'ActionLabel' = if ($isMissing) { 'Add' } else { 'Remove' }
+                'ActionBg'    = if ($isMissing) { $brushConv.ConvertFromString('#DFF6DD') } else { $brushConv.ConvertFromString('#FDE7E9') }
+                'ActionFg'    = if ($isMissing) { $brushConv.ConvertFromString('#107C10') } else { $brushConv.ConvertFromString('#D13438') }
             }
         }
         $script:TagRecsGrid.ItemsSource = @($recRows)
@@ -1754,14 +1804,24 @@ $script:TrendSubSelector.Add_SelectionChanged({
 $script:tagDeployCurrentTag = $null
 $script:tagDeployScopesLoaded = $false
 $script:tagDeployScopes = @()
+$script:tagRemoveMode = $false
 
 function Show-TagDeployPanel {
     param([string]$TagName)
 
     $script:tagDeployCurrentTag = $TagName
+    $script:tagRemoveMode = $false
     $script:TagDeployTitle.Text = "Deploy tag: $TagName"
     $script:TagDeployStatus.Text = ''
     $script:TagValueInput.Text = ''
+    $script:TagValueInput.Visibility = 'Visible'
+    # Show the tag value label
+    $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
+    if ($valIdx -gt 0) {
+        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Visible'
+    }
+    $script:TagDeployButton.Content = 'Deploy Tag'
+    $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4')
     $script:TagDeployPanel.Visibility = 'Visible'
 
     # Load scopes lazily (once per scan)
@@ -1784,34 +1844,40 @@ function Show-TagDeployPanel {
     }
 }
 
-function Populate-MissingTagButtons {
-    $script:MissingTagButtons.Children.Clear()
-    if (-not $script:scanData.TagRecs) { return }
+function Show-TagRemovePanel {
+    param([string]$TagName)
 
-    $missing = $script:scanData.TagRecs.Analysis | Where-Object { $_.Status -eq 'Missing' }
-    if ($missing.Count -eq 0) {
-        $noMissing = [System.Windows.Controls.TextBlock]::new()
-        $noMissing.Text = 'All recommended tags are present.'
-        $noMissing.FontSize = 12
-        $noMissing.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
-        $script:MissingTagButtons.Children.Add($noMissing) | Out-Null
-        return
+    $script:tagDeployCurrentTag = $TagName
+    $script:tagRemoveMode = $true
+    $script:TagDeployTitle.Text = "Remove tag: $TagName"
+    $script:TagDeployStatus.Text = ''
+    $script:TagValueInput.Visibility = 'Collapsed'
+    # Hide the tag value label (previous sibling)
+    $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
+    if ($valIdx -gt 0) {
+        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Collapsed'
+    }
+    $script:TagDeployButton.Content = 'Remove Tag'
+    $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D13438')
+    $script:TagDeployPanel.Visibility = 'Visible'
+
+    # Load scopes lazily
+    if (-not $script:tagDeployScopesLoaded -and $script:scanData.Auth) {
+        $script:TagDeployStatus.Text = 'Loading scopes...'
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+            [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
+        )
+        $script:tagDeployScopes = Get-TagScopes -Subscriptions $script:scanData.Auth.Subscriptions
+        $script:tagDeployScopesLoaded = $true
+        $script:TagDeployStatus.Text = ''
     }
 
-    foreach ($tag in $missing) {
-        $btn = [System.Windows.Controls.Button]::new()
-        $btn.Content = "+ $($tag.TagName)"
-        $btn.FontSize = 12
-        $btn.Padding = [System.Windows.Thickness]::new(12, 6, 12, 6)
-        $btn.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
-        $btn.Cursor = [System.Windows.Input.Cursors]::Hand
-        $btn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FFF3E0')
-        $btn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-        $btn.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-        $btn.BorderThickness = [System.Windows.Thickness]::new(1)
-        $tagName = $tag.TagName
-        $btn.Add_Click({ Show-TagDeployPanel -TagName $tagName }.GetNewClosure())
-        $script:MissingTagButtons.Children.Add($btn) | Out-Null
+    $script:TagScopeSelector.Items.Clear()
+    foreach ($s in $script:tagDeployScopes) {
+        $script:TagScopeSelector.Items.Add($s.DisplayName) | Out-Null
+    }
+    if ($script:tagDeployScopes.Count -gt 0) {
+        $script:TagScopeSelector.SelectedIndex = 0
     }
 }
 
@@ -1857,23 +1923,77 @@ function Populate-PolicyTab {
         $script:PolicyComplianceGrid.ItemsSource = @($compRows)
     }
 
-    # Policy recommendations
+    # Policy recommendations with inline action buttons
     if ($d.PolicyRecs) {
         $assignedCount  = $d.PolicyRecs.Assigned.Count
         $analysisCount  = $d.PolicyRecs.Analysis.Count
         $script:PolicyRecsCountText.Text = "$assignedCount / $analysisCount"
         $script:PolicyRecsComplianceText.Text = "CAF policy coverage: $($d.PolicyRecs.CompliancePct)% ($assignedCount of $analysisCount recommended policies assigned)"
 
-        $recRows = $d.PolicyRecs.Analysis | ForEach-Object {
-            [PSCustomObject]@{
-                'Policy'     = $_.DisplayName
-                'Status'     = $_.Status
-                'Category'   = $_.Category
-                'Priority'   = $_.Priority
-                'Pillar'     = $_.Pillar
-                'Effect'     = $_.DefaultEffect
-                'Purpose'    = $_.Purpose
+        # Build the policy recs grid with programmatic columns including an Action button
+        $script:PolicyRecsGrid.AutoGenerateColumns = $false
+        $script:PolicyRecsGrid.Columns.Clear()
+
+        # Data columns
+        foreach ($col in @('Policy','Status','Category','Priority','Pillar','Effect','Purpose')) {
+            $dgCol = [System.Windows.Controls.DataGridTextColumn]::new()
+            $dgCol.Header = $col
+            $dgCol.Binding = [System.Windows.Data.Binding]::new($col)
+            if ($col -eq 'Purpose') { $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star) }
+            $script:PolicyRecsGrid.Columns.Add($dgCol)
+        }
+
+        # Action button template column
+        $actionCol = [System.Windows.Controls.DataGridTemplateColumn]::new()
+        $actionCol.Header = 'Action'
+        $actionCol.Width = 110
+
+        $cellFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.Button])
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::ContentProperty, [System.Windows.Data.Binding]::new('ActionLabel'))
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::BackgroundProperty, [System.Windows.Data.Binding]::new('ActionBg'))
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::ForegroundProperty, [System.Windows.Data.Binding]::new('ActionFg'))
+        $cellFactory.SetBinding([System.Windows.Controls.Button]::TagProperty, [System.Windows.Data.Binding]::new('PolicyIndex'))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]11)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(8,3,8,3))
+        $cellFactory.SetValue([System.Windows.Controls.Button]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
+        $cellFactory.SetValue([System.Windows.Controls.Button]::BorderThicknessProperty, [System.Windows.Thickness]::new(1))
+        $cellFactory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
+            param($sender, $e)
+            $idx = [int]$sender.Tag
+            $pol = $script:scanData.PolicyRecs.Analysis[$idx]
+            if ($pol.Status -eq 'Missing') {
+                $polParams = if ($pol.Parameters) { $pol.Parameters } else { @() }
+                Show-PolicyDeployPanel -PolicyDisplayName $pol.DisplayName -PolicyDefId $pol.PolicyDefId -AllowedEffects $pol.AllowedEffects -DefaultEffect $pol.DefaultEffect -Parameters $polParams
+            } else {
+                Show-PolicyUnassignPanel -PolicyDisplayName $pol.DisplayName -PolicyDefId $pol.PolicyDefId
             }
+        })
+
+        $cellTemplate = [System.Windows.DataTemplate]::new()
+        $cellTemplate.VisualTree = $cellFactory
+        $actionCol.CellTemplate = $cellTemplate
+        $script:PolicyRecsGrid.Columns.Add($actionCol)
+
+        # Populate rows with action metadata
+        $brushConv = [System.Windows.Media.BrushConverter]::new()
+        $idx = 0
+        $recRows = $d.PolicyRecs.Analysis | ForEach-Object {
+            $isMissing = $_.Status -eq 'Missing'
+            $row = [PSCustomObject]@{
+                'Policy'      = $_.DisplayName
+                'Status'      = $_.Status
+                'Category'    = $_.Category
+                'Priority'    = $_.Priority
+                'Pillar'      = $_.Pillar
+                'Effect'      = $_.DefaultEffect
+                'Purpose'     = $_.Purpose
+                'PolicyIndex' = $idx
+                'ActionLabel' = if ($isMissing) { 'Deploy' } else { 'Unassign' }
+                'ActionBg'    = if ($isMissing) { $brushConv.ConvertFromString('#DFF6DD') } else { $brushConv.ConvertFromString('#FDE7E9') }
+                'ActionFg'    = if ($isMissing) { $brushConv.ConvertFromString('#107C10') } else { $brushConv.ConvertFromString('#D13438') }
+            }
+            $idx++
+            $row
         }
         $script:PolicyRecsGrid.ItemsSource = @($recRows)
     }
@@ -1891,9 +2011,24 @@ function Show-PolicyDeployPanel {
     $script:policyDeployCurrentDefId   = $PolicyDefId
     $script:policyDeployCurrentName    = $PolicyDisplayName
     $script:policyDeployCurrentParams  = $Parameters
+    $script:policyUnassignMode = $false
     $script:PolicyDeployTitle.Text     = "Deploy policy: $PolicyDisplayName"
     $script:PolicyDeployStatus.Text    = ''
     $script:PolicyDeployPanel.Visibility = 'Visible'
+    $script:PolicyDeployButton.Content = 'Deploy Policy'
+    $script:PolicyDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4')
+
+    # Ensure scope/effect/params are visible (may have been hidden by unassign)
+    $script:PolicyScopeSelector.Visibility = 'Visible'
+    $script:PolicyEffectSelector.Visibility = 'Visible'
+    $script:PolicyParamsPanel.Visibility = 'Visible'
+    foreach ($ctrl in @($script:PolicyScopeSelector, $script:PolicyEffectSelector)) {
+        $parent = $ctrl.Parent
+        if ($parent) {
+            $idx = $parent.Children.IndexOf($ctrl)
+            if ($idx -gt 0) { $parent.Children[$idx - 1].Visibility = 'Visible' }
+        }
+    }
 
     # Populate effect selector
     $script:PolicyEffectSelector.Items.Clear()
@@ -1947,42 +2082,59 @@ function Show-PolicyDeployPanel {
     }
 }
 
-function Populate-MissingPolicyButtons {
-    $script:MissingPolicyButtons.Children.Clear()
-    if (-not $script:scanData.PolicyRecs) { return }
+function Show-PolicyUnassignPanel {
+    param(
+        [string]$PolicyDisplayName,
+        [string]$PolicyDefId
+    )
 
-    $missing = $script:scanData.PolicyRecs.Missing
-    if ($missing.Count -eq 0) {
-        $noMissing = [System.Windows.Controls.TextBlock]::new()
-        $noMissing.Text = 'All recommended FinOps policies are assigned.'
-        $noMissing.FontSize = 12
-        $noMissing.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
-        $script:MissingPolicyButtons.Children.Add($noMissing) | Out-Null
+    $script:policyDeployCurrentDefId = $PolicyDefId
+    $script:policyDeployCurrentName  = $PolicyDisplayName
+    $script:policyUnassignMode = $true
+    $script:PolicyDeployTitle.Text     = "Unassign policy: $PolicyDisplayName"
+    $script:PolicyDeployStatus.Text    = ''
+    $script:PolicyDeployPanel.Visibility = 'Visible'
+    $script:PolicyRemediateButton.Visibility = 'Collapsed'
+
+    # Hide scope/effect/params (not needed for unassign)
+    $script:PolicyScopeSelector.Visibility = 'Collapsed'
+    $script:PolicyEffectSelector.Visibility = 'Collapsed'
+    $script:PolicyParamsPanel.Visibility = 'Collapsed'
+    # Hide their labels by finding previous siblings
+    foreach ($ctrl in @($script:PolicyScopeSelector, $script:PolicyEffectSelector)) {
+        $parent = $ctrl.Parent
+        if ($parent) {
+            $idx = $parent.Children.IndexOf($ctrl)
+            if ($idx -gt 0) { $parent.Children[$idx - 1].Visibility = 'Collapsed' }
+        }
+    }
+
+    $script:PolicyDeployButton.Content = 'Unassign Policy'
+    $script:PolicyDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D13438')
+
+    # Find matching assignment(s) from inventory
+    $matchingAssignments = @()
+    if ($script:scanData.PolicyInv -and $script:scanData.PolicyInv.Assignments) {
+        $matchingAssignments = @($script:scanData.PolicyInv.Assignments | Where-Object {
+            $_.PolicyDefId -and $_.PolicyDefId.ToLower() -eq $PolicyDefId.ToLower()
+        })
+    }
+
+    if ($matchingAssignments.Count -eq 0) {
+        $script:PolicyDeployStatus.Text = "No assignment found for this policy in the inventory. It may be assigned with a different name."
+        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
         return
     }
 
-    foreach ($pol in $missing) {
-        $btn = [System.Windows.Controls.Button]::new()
-        $btn.Content = "+ $($pol.DisplayName)"
-        $btn.FontSize = 11
-        $btn.Padding = [System.Windows.Thickness]::new(10, 5, 10, 5)
-        $btn.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
-        $btn.Cursor = [System.Windows.Input.Cursors]::Hand
-        $btn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FFF3E0')
-        $btn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-        $btn.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-        $btn.BorderThickness = [System.Windows.Thickness]::new(1)
-        $polName    = $pol.DisplayName
-        $polDefId   = $pol.PolicyDefId
-        $polEffects = $pol.AllowedEffects
-        $polDefault = $pol.DefaultEffect
-        $polParams  = if ($pol.Parameters) { $pol.Parameters } else { @() }
-        $btn.Add_Click({
-            Show-PolicyDeployPanel -PolicyDisplayName $polName -PolicyDefId $polDefId -AllowedEffects $polEffects -DefaultEffect $polDefault -Parameters $polParams
-        }.GetNewClosure())
-        $script:MissingPolicyButtons.Children.Add($btn) | Out-Null
-    }
+    # Store for the unassign handler
+    $script:policyUnassignTargets = $matchingAssignments
+    $count = $matchingAssignments.Count
+    $script:PolicyDeployStatus.Text = "$count assignment(s) found. Click Unassign to remove."
+    $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
 }
+
+$script:policyUnassignMode = $false
+$script:policyUnassignTargets = @()
 
 #-----------------------------------------------------------------------
 # BILLING TAB POPULATION
@@ -3176,9 +3328,7 @@ $script:scanStages = @(
         try { Populate-TrendChart }        catch { Write-Warning "Populate-TrendChart failed: $($_.Exception.Message)" }
         try { Populate-AnomalySection }    catch { Write-Warning "Populate-AnomalySection failed: $($_.Exception.Message)" }
         try { Populate-TagsTab }           catch { Write-Warning "Populate-TagsTab failed: $($_.Exception.Message)" }
-        try { Populate-MissingTagButtons } catch { Write-Warning "Populate-MissingTagButtons failed: $($_.Exception.Message)" }
         try { Populate-PolicyTab }         catch { Write-Warning "Populate-PolicyTab failed: $($_.Exception.Message)" }
-        try { Populate-MissingPolicyButtons } catch { Write-Warning "Populate-MissingPolicyButtons failed: $($_.Exception.Message)" }
         try { Populate-CommitmentSection } catch { Write-Warning "Populate-CommitmentSection failed: $($_.Exception.Message)" }
         try { Populate-OrphanedSection }   catch { Write-Warning "Populate-OrphanedSection failed: $($_.Exception.Message)" }
         try { Populate-OptimizationTab }   catch { Write-Warning "Populate-OptimizationTab failed: $($_.Exception.Message)" }
@@ -3369,18 +3519,13 @@ $script:TagSelector.Add_SelectionChanged({
     }
 })
 
-# Tag Deploy Button
+# Tag Deploy Button (handles both Add and Remove modes)
 $script:TagDeployButton.Add_Click({
     $tagName = $script:tagDeployCurrentTag
-    $tagValue = $script:TagValueInput.Text.Trim()
     $selectedIdx = $script:TagScopeSelector.SelectedIndex
 
     if (-not $tagName) {
         $script:TagDeployStatus.Text = 'No tag selected.'
-        return
-    }
-    if ([string]::IsNullOrWhiteSpace($tagValue)) {
-        $script:TagDeployStatus.Text = 'Please enter a tag value.'
         return
     }
     if ($selectedIdx -lt 0 -or $selectedIdx -ge $script:tagDeployScopes.Count) {
@@ -3389,94 +3534,173 @@ $script:TagDeployButton.Add_Click({
     }
 
     $scope = $script:tagDeployScopes[$selectedIdx].Scope
-    $script:TagDeployStatus.Text = 'Deploying...'
-    $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
     $script:TagDeployButton.IsEnabled = $false
 
-    # Get bearer token on the main thread (Az context is available here)
-    try {
-        $token = Get-PlainAccessToken
-    } catch {
-        $script:TagDeployStatus.Text = "Failed: Could not get access token - $($_.Exception.Message)"
-        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-        $script:TagDeployButton.IsEnabled = $true
-        return
-    }
+    if ($script:tagRemoveMode) {
+        # REMOVE TAG
+        $script:TagDeployStatus.Text = 'Removing...'
+        $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
 
-    # Run the REST call in a background runspace so the WPF UI stays responsive.
-    # Uses Invoke-WebRequest (not Invoke-AzRestMethod) because:
-    #   1) Invoke-AzRestMethod has no timeout parameter and can hang indefinitely
-    #   2) Invoke-WebRequest supports -TimeoutSec
-    #   3) No Az module needed in the runspace -- just the bearer token
-    $rs = [runspacefactory]::CreateRunspace()
-    $rs.Open()
-    $ps = [powershell]::Create()
-    $ps.Runspace = $rs
-    [void]$ps.AddScript({
-        param($deployScope, $deployTagName, $deployTagValue, $deployToken)
-        $uri = "https://management.azure.com$deployScope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
-        $body = @{
-            operation  = 'Merge'
-            properties = @{ tags = @{ $deployTagName = $deployTagValue } }
-        } | ConvertTo-Json -Depth 5
-        $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
         try {
-            $resp = Invoke-WebRequest -Uri $uri -Method Patch -Body $body -Headers $hdrs `
-                -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-            [PSCustomObject]@{ Success = $true; Message = "Tag '$deployTagName=$deployTagValue' applied"; StatusCode = [int]$resp.StatusCode }
+            $token = Get-PlainAccessToken
         } catch {
-            $errMsg = $_.Exception.Message
-            $sc = 0
-            if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
-                $sc = [int]$_.Exception.Response.StatusCode
-                try {
-                    $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
-                    $errContent = $sr.ReadToEnd(); $sr.Close()
-                    $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
-                    if ($errBody.error) { $errMsg = $errBody.error.message }
-                } catch {}
+            $script:TagDeployStatus.Text = "Failed: Could not get access token - $($_.Exception.Message)"
+            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+            $script:TagDeployButton.IsEnabled = $true
+            return
+        }
+
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            param($deployScope, $deployTagName, $deployToken)
+            $uri = "https://management.azure.com$deployScope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
+            $body = @{
+                operation  = 'Delete'
+                properties = @{ tags = @{ $deployTagName = '' } }
+            } | ConvertTo-Json -Depth 5
+            $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
+            try {
+                $resp = Invoke-WebRequest -Uri $uri -Method Patch -Body $body -Headers $hdrs `
+                    -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+                [PSCustomObject]@{ Success = $true; Message = "Tag '$deployTagName' removed" }
+            } catch {
+                $errMsg = $_.Exception.Message
+                if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+                    try {
+                        $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                        $errContent = $sr.ReadToEnd(); $sr.Close()
+                        $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
+                        if ($errBody.error) { $errMsg = $errBody.error.message }
+                    } catch {}
+                }
+                [PSCustomObject]@{ Success = $false; Message = $errMsg }
             }
-            [PSCustomObject]@{ Success = $false; Message = $errMsg; StatusCode = $sc }
+        }).AddArgument($scope).AddArgument($tagName).AddArgument($token)
+
+        $asyncResult = $ps.BeginInvoke()
+        $deadline = (Get-Date).AddSeconds(35)
+        while (-not $asyncResult.IsCompleted -and (Get-Date) -lt $deadline) {
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::Background,
+                [action]{ $frame.Continue = $false }
+            )
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+            Start-Sleep -Milliseconds 100
         }
-    }).AddArgument($scope).AddArgument($tagName).AddArgument($tagValue).AddArgument($token)
 
-    $asyncResult = $ps.BeginInvoke()
-    $deadline = (Get-Date).AddSeconds(35)   # slightly > the 30s REST timeout
-
-    # DispatcherFrame loop: processes WPF render/input messages while waiting
-    while (-not $asyncResult.IsCompleted -and (Get-Date) -lt $deadline) {
-        $frame = [System.Windows.Threading.DispatcherFrame]::new()
-        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
-            [System.Windows.Threading.DispatcherPriority]::Background,
-            [action]{ $frame.Continue = $false }
-        )
-        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
-        Start-Sleep -Milliseconds 100
-    }
-
-    if ($asyncResult.IsCompleted) {
-        try {
-            $results = $ps.EndInvoke($asyncResult)
-            $result = if ($results.Count -gt 0) { $results[0] } else { $null }
-        } catch {
-            $result = [PSCustomObject]@{ Success = $false; Message = $_.Exception.Message }
-        }
-        if ($result -and $result.Success) {
-            $script:TagDeployStatus.Text = "Deployed: $tagName=$tagValue"
-            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+        if ($asyncResult.IsCompleted) {
+            try {
+                $results = $ps.EndInvoke($asyncResult)
+                $result = if ($results.Count -gt 0) { $results[0] } else { $null }
+            } catch {
+                $result = [PSCustomObject]@{ Success = $false; Message = $_.Exception.Message }
+            }
+            if ($result -and $result.Success) {
+                $script:TagDeployStatus.Text = "Removed: $tagName"
+                $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+            } else {
+                $errMsg = if ($result) { $result.Message } else { 'Unknown error' }
+                $script:TagDeployStatus.Text = "Failed: $errMsg"
+                $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+            }
         } else {
-            $errMsg = if ($result) { $result.Message } else { 'Unknown error' }
-            $script:TagDeployStatus.Text = "Failed: $errMsg"
+            $ps.Stop()
+            $script:TagDeployStatus.Text = 'Failed: Removal timed out after 30 seconds'
             $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
         }
+        $ps.Dispose()
+        $rs.Close()
     } else {
-        $ps.Stop()
-        $script:TagDeployStatus.Text = 'Failed: Deployment timed out after 30 seconds'
-        $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        # ADD TAG
+        $tagValue = $script:TagValueInput.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($tagValue)) {
+            $script:TagDeployStatus.Text = 'Please enter a tag value.'
+            $script:TagDeployButton.IsEnabled = $true
+            return
+        }
+
+        $script:TagDeployStatus.Text = 'Deploying...'
+        $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+
+        try {
+            $token = Get-PlainAccessToken
+        } catch {
+            $script:TagDeployStatus.Text = "Failed: Could not get access token - $($_.Exception.Message)"
+            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+            $script:TagDeployButton.IsEnabled = $true
+            return
+        }
+
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            param($deployScope, $deployTagName, $deployTagValue, $deployToken)
+            $uri = "https://management.azure.com$deployScope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
+            $body = @{
+                operation  = 'Merge'
+                properties = @{ tags = @{ $deployTagName = $deployTagValue } }
+            } | ConvertTo-Json -Depth 5
+            $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
+            try {
+                $resp = Invoke-WebRequest -Uri $uri -Method Patch -Body $body -Headers $hdrs `
+                    -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+                [PSCustomObject]@{ Success = $true; Message = "Tag '$deployTagName=$deployTagValue' applied" }
+            } catch {
+                $errMsg = $_.Exception.Message
+                if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+                    try {
+                        $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                        $errContent = $sr.ReadToEnd(); $sr.Close()
+                        $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
+                        if ($errBody.error) { $errMsg = $errBody.error.message }
+                    } catch {}
+                }
+                [PSCustomObject]@{ Success = $false; Message = $errMsg }
+            }
+        }).AddArgument($scope).AddArgument($tagName).AddArgument($tagValue).AddArgument($token)
+
+        $asyncResult = $ps.BeginInvoke()
+        $deadline = (Get-Date).AddSeconds(35)
+        while (-not $asyncResult.IsCompleted -and (Get-Date) -lt $deadline) {
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::Background,
+                [action]{ $frame.Continue = $false }
+            )
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+            Start-Sleep -Milliseconds 100
+        }
+
+        if ($asyncResult.IsCompleted) {
+            try {
+                $results = $ps.EndInvoke($asyncResult)
+                $result = if ($results.Count -gt 0) { $results[0] } else { $null }
+            } catch {
+                $result = [PSCustomObject]@{ Success = $false; Message = $_.Exception.Message }
+            }
+            if ($result -and $result.Success) {
+                $script:TagDeployStatus.Text = "Deployed: $tagName=$tagValue"
+                $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+            } else {
+                $errMsg = if ($result) { $result.Message } else { 'Unknown error' }
+                $script:TagDeployStatus.Text = "Failed: $errMsg"
+                $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+            }
+        } else {
+            $ps.Stop()
+            $script:TagDeployStatus.Text = 'Failed: Deployment timed out after 30 seconds'
+            $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        }
+        $ps.Dispose()
+        $rs.Close()
     }
 
-    $ps.Dispose()
-    $rs.Close()
     $script:TagDeployButton.IsEnabled = $true
 })
 
@@ -3486,80 +3710,127 @@ $script:TagDeployCancelButton.Add_Click({
     $script:tagDeployCurrentTag = $null
 })
 
-# Policy Deploy Button
+# Policy Deploy / Unassign Button (handles both modes)
 $script:PolicyDeployButton.Add_Click({
     $defId       = $script:policyDeployCurrentDefId
     $displayName = $script:policyDeployCurrentName
-    $effect      = $script:PolicyEffectSelector.SelectedItem
-    $selectedIdx = $script:PolicyScopeSelector.SelectedIndex
 
     if (-not $defId) {
         $script:PolicyDeployStatus.Text = 'No policy selected.'
         return
     }
-    if (-not $effect) {
-        $script:PolicyDeployStatus.Text = 'Please select an effect.'
-        return
-    }
-    if ($selectedIdx -lt 0 -or $selectedIdx -ge $script:policyDeployScopes.Count) {
-        $script:PolicyDeployStatus.Text = 'Please select a scope.'
-        return
-    }
 
-    $scope = $script:policyDeployScopes[$selectedIdx].Scope
+    $script:PolicyDeployButton.IsEnabled = $false
 
-    # Collect dynamic parameter values
-    $additionalParams = @{}
-    if ($script:policyParamTextBoxes -and $script:policyParamTextBoxes.Count -gt 0) {
-        foreach ($key in $script:policyParamTextBoxes.Keys) {
-            $entry = $script:policyParamTextBoxes[$key]
-            $val = $entry.TextBox.Text.Trim()
-            $paramDef = $entry.Param
-            if ($paramDef.Required -and [string]::IsNullOrWhiteSpace($val)) {
-                $script:PolicyDeployStatus.Text = "Required parameter missing: $($paramDef.Label -replace ' \*$','')"
-                $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-                return
-            }
-            if (-not [string]::IsNullOrWhiteSpace($val)) {
-                if ($paramDef.IsArray) {
-                    $additionalParams[$key] = @($val -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($script:policyUnassignMode) {
+        # UNASSIGN MODE
+        $targets = $script:policyUnassignTargets
+        if (-not $targets -or $targets.Count -eq 0) {
+            $script:PolicyDeployStatus.Text = 'No assignment found to remove.'
+            $script:PolicyDeployButton.IsEnabled = $true
+            return
+        }
+
+        $script:PolicyDeployStatus.Text = 'Removing assignment(s)...'
+        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+            [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
+
+        $successCount = 0
+        $failMsg = ''
+        foreach ($assignment in $targets) {
+            try {
+                $result = Remove-PolicyAssignment -AssignmentId $assignment.AssignmentId
+                if ($result.Success) {
+                    $successCount++
                 } else {
-                    $additionalParams[$key] = $val
+                    $failMsg = $result.Message
+                }
+            } catch {
+                $failMsg = $_.Exception.Message
+            }
+        }
+
+        if ($successCount -eq $targets.Count) {
+            $script:PolicyDeployStatus.Text = "Unassigned: $displayName ($successCount assignment(s) removed)"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+        } elseif ($successCount -gt 0) {
+            $script:PolicyDeployStatus.Text = "Partial: $successCount of $($targets.Count) removed. Last error: $failMsg"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        } else {
+            $script:PolicyDeployStatus.Text = "Failed: $failMsg"
+            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+        }
+    } else {
+        # DEPLOY MODE
+        $effect      = $script:PolicyEffectSelector.SelectedItem
+        $selectedIdx = $script:PolicyScopeSelector.SelectedIndex
+
+        if (-not $effect) {
+            $script:PolicyDeployStatus.Text = 'Please select an effect.'
+            $script:PolicyDeployButton.IsEnabled = $true
+            return
+        }
+        if ($selectedIdx -lt 0 -or $selectedIdx -ge $script:policyDeployScopes.Count) {
+            $script:PolicyDeployStatus.Text = 'Please select a scope.'
+            $script:PolicyDeployButton.IsEnabled = $true
+            return
+        }
+
+        $scope = $script:policyDeployScopes[$selectedIdx].Scope
+
+        # Collect dynamic parameter values
+        $additionalParams = @{}
+        if ($script:policyParamTextBoxes -and $script:policyParamTextBoxes.Count -gt 0) {
+            foreach ($key in $script:policyParamTextBoxes.Keys) {
+                $entry = $script:policyParamTextBoxes[$key]
+                $val = $entry.TextBox.Text.Trim()
+                $paramDef = $entry.Param
+                if ($paramDef.Required -and [string]::IsNullOrWhiteSpace($val)) {
+                    $script:PolicyDeployStatus.Text = "Required parameter missing: $($paramDef.Label -replace ' \*$','')"
+                    $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+                    $script:PolicyDeployButton.IsEnabled = $true
+                    return
+                }
+                if (-not [string]::IsNullOrWhiteSpace($val)) {
+                    if ($paramDef.IsArray) {
+                        $additionalParams[$key] = @($val -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                    } else {
+                        $additionalParams[$key] = $val
+                    }
                 }
             }
         }
-    }
 
-    $script:PolicyDeployStatus.Text = 'Deploying...'
-    $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
-    $script:PolicyDeployButton.IsEnabled = $false
+        $script:PolicyDeployStatus.Text = 'Deploying...'
+        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
 
-    # Flush UI render queue so status text is visible during the blocking REST call
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-        [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+            [System.Windows.Threading.DispatcherPriority]::Render, [action]{})
 
-    try {
-        $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $defId -Effect $effect -DisplayName $displayName -AdditionalParameters $additionalParams
-        if ($result.Success) {
-            $script:PolicyDeployStatus.Text = "Deployed: $displayName ($effect)"
-            $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
-            # Show remediation button for effects that support it
-            if ($effect -in @('DeployIfNotExists', 'Modify')) {
-                $script:lastPolicyAssignmentScope = $scope
-                $script:lastPolicyAssignmentId = "$scope/providers/Microsoft.Authorization/policyAssignments/$($result.AssignmentName)"
-                $script:PolicyRemediateButton.Visibility = 'Visible'
+        try {
+            $result = Deploy-PolicyAssignment -Scope $scope -PolicyDefinitionId $defId -Effect $effect -DisplayName $displayName -AdditionalParameters $additionalParams
+            if ($result.Success) {
+                $script:PolicyDeployStatus.Text = "Deployed: $displayName ($effect)"
+                $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+                if ($effect -in @('DeployIfNotExists', 'Modify')) {
+                    $script:lastPolicyAssignmentScope = $scope
+                    $script:lastPolicyAssignmentId = "$scope/providers/Microsoft.Authorization/policyAssignments/$($result.AssignmentName)"
+                    $script:PolicyRemediateButton.Visibility = 'Visible'
+                } else {
+                    $script:PolicyRemediateButton.Visibility = 'Collapsed'
+                }
             } else {
+                $script:PolicyDeployStatus.Text = "Failed: $($result.Message)"
+                $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
                 $script:PolicyRemediateButton.Visibility = 'Collapsed'
             }
-        } else {
-            $script:PolicyDeployStatus.Text = "Failed: $($result.Message)"
+        } catch {
+            $script:PolicyDeployStatus.Text = "Failed: $($_.Exception.Message)"
             $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
             $script:PolicyRemediateButton.Visibility = 'Collapsed'
         }
-    } catch {
-        $script:PolicyDeployStatus.Text = "Failed: $($_.Exception.Message)"
-        $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
-        $script:PolicyRemediateButton.Visibility = 'Collapsed'
     }
     $script:PolicyDeployButton.IsEnabled = $true
 })
@@ -3600,6 +3871,19 @@ $script:PolicyDeployCancelButton.Add_Click({
     $script:PolicyRemediateButton.Visibility = 'Collapsed'
     $script:policyDeployCurrentDefId = $null
     $script:policyDeployCurrentName  = $null
+    $script:policyUnassignMode = $false
+    $script:policyUnassignTargets = @()
+    # Restore visibility of scope/effect/params for next open
+    $script:PolicyScopeSelector.Visibility = 'Visible'
+    $script:PolicyEffectSelector.Visibility = 'Visible'
+    $script:PolicyParamsPanel.Visibility = 'Visible'
+    foreach ($ctrl in @($script:PolicyScopeSelector, $script:PolicyEffectSelector)) {
+        $parent = $ctrl.Parent
+        if ($parent) {
+            $idx = $parent.Children.IndexOf($ctrl)
+            if ($idx -gt 0) { $parent.Children[$idx - 1].Visibility = 'Visible' }
+        }
+    }
 })
 
 # Tree Selection

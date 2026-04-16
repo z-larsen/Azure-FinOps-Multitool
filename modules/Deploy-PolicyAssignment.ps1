@@ -122,6 +122,50 @@ function Deploy-PolicyAssignment {
     }
 }
 
+function Remove-PolicyAssignment {
+    <#
+    .SYNOPSIS
+    Deletes a policy assignment by its full ARM assignment ID.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AssignmentId   # Full ARM resource ID of the assignment
+    )
+
+    Write-Host "  Removing policy assignment: $AssignmentId" -ForegroundColor Cyan
+
+    $deletePath = "$($AssignmentId)?api-version=2022-06-01"
+
+    try {
+        $response = Invoke-AzRestMethodWithRetry -Path $deletePath -Method DELETE
+        if ($response.StatusCode -in @(200, 204)) {
+            Write-Host "    Policy assignment removed successfully." -ForegroundColor Green
+            return [PSCustomObject]@{
+                Success    = $true
+                Message    = "Policy assignment removed"
+                StatusCode = $response.StatusCode
+            }
+        } else {
+            $errBody = ($response.Content | ConvertFrom-Json -ErrorAction SilentlyContinue)
+            $errMsg = if ($errBody.error) { $errBody.error.message } else { "HTTP $($response.StatusCode)" }
+            Write-Warning "    Policy removal failed: $errMsg"
+            return [PSCustomObject]@{
+                Success    = $false
+                Message    = $errMsg
+                StatusCode = $response.StatusCode
+            }
+        }
+    } catch {
+        Write-Warning "    Policy removal error: $($_.Exception.Message)"
+        return [PSCustomObject]@{
+            Success    = $false
+            Message    = $_.Exception.Message
+            StatusCode = 0
+        }
+    }
+}
+
 function Get-PolicyScopes {
     <#
     .SYNOPSIS

@@ -302,12 +302,8 @@
                             <!-- Tag Recommendations -->
                             <TextBlock Text="Tag Recommendations (Cloud Adoption Framework)" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="TagComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>
-                            <DataGrid x:Name="TagRecsGrid" MaxHeight="200"/>
-
-                            <!-- Deploy Missing Tags -->
-                            <TextBlock Text="Deploy Missing Tags" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="Click a missing tag below to deploy it to a subscription or resource group." FontSize="12" Foreground="#666" Margin="0,0,0,8"/>
-                            <WrapPanel x:Name="MissingTagButtons" Margin="0,0,0,12"/>
+                            <TextBlock Text="Click Add to deploy a missing tag or Remove to delete a present tag from a scope." FontSize="12" Foreground="#666" Margin="0,0,0,4"/>
+                            <DataGrid x:Name="TagRecsGrid" MaxHeight="300"/>
 
                             <!-- Tag Deploy Dialog (inline, hidden by default) -->
                             <Border x:Name="TagDeployPanel" Background="#F8F8F8" CornerRadius="4" Padding="16" Margin="0,0,0,10"
@@ -377,12 +373,8 @@
                             <!-- FinOps Policy Recommendations -->
                             <TextBlock Text="CAF Recommended Policies &amp; Initiatives" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="PolicyRecsComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>
-                            <DataGrid x:Name="PolicyRecsGrid" MaxHeight="250"/>
-
-                            <!-- Deploy Missing Policies -->
-                            <TextBlock Text="Deploy Missing Policies" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="Click a missing policy below to deploy it to a subscription or resource group." FontSize="12" Foreground="#666" Margin="0,0,0,8"/>
-                            <WrapPanel x:Name="MissingPolicyButtons" Margin="0,0,0,12"/>
+                            <TextBlock Text="Click Deploy to assign a missing policy or Unassign to remove an assigned policy." FontSize="12" Foreground="#666" Margin="0,0,0,4"/>
+                            <DataGrid x:Name="PolicyRecsGrid" MaxHeight="350"/>
 
                             <!-- Policy Deploy Dialog (inline, hidden by default) -->
                             <Border x:Name="PolicyDeployPanel" Background="#F8F8F8" CornerRadius="4" Padding="16" Margin="0,0,0,10"

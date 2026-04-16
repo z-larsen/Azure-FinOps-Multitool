@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 1.8.0](https://img.shields.io/badge/Version-1.8.0-brightgreen)
+![Version 1.9.0](https://img.shields.io/badge/Version-1.9.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -39,7 +39,7 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 | **Contract**        | Billing Accounts API + ARM quotaId | EA, MCA, PAYGO, or CSP detection (quotaId fallback)        |
 | **Tags**            | Azure Resource Graph              | Every tag name/value in use, untagged resource count        |
 | **Cost by Tag**     | Cost Management API               | Spend broken down by CAF allocation tags (CostCenter, BusinessUnit, ApplicationName, etc.) plus auto-backfill of non-priority tags (up to 5 total); auto-fallback to last month |
-| **Tag Deploy**      | ARM Tags API (PATCH merge)        | Click missing tags to deploy them to subscriptions or RGs  |
+| **Tag Deploy**      | ARM Tags API (PATCH merge/delete) | Inline Add/Remove buttons per tag in the recommendations grid; deploy or remove tags from subscriptions or RGs |
 | **AHB**             | Azure Resource Graph              | Windows VMs, SQL VMs, and SQL DBs missing Hybrid Benefit   |
 | **Commitments**     | Reservation Summaries + Benefit Utilization API | RI and Savings Plan utilization %, underutilized commitments |
 | **Orphaned Resources** | Azure Resource Graph (6 KQL queries) | Orphaned disks, unattached IPs/NICs, deallocated VMs, empty ASPs, old snapshots — with per-resource Cost (MTD) and Est. Annual waste |
@@ -51,7 +51,7 @@ It's designed as the on-ramp — the tool that earns the first conversation, sur
 | **Tag Recs**        | Cloud Adoption Framework baseline | Gap analysis against 7 CAF allocation tags (CostCenter, BusinessUnit, ApplicationName, WorkloadName, OpsTeam, Criticality, DataClassification) with deployment location |
 | **Policy Inventory** | ARM Policy Assignment API + Resource Graph | All effective policy and initiative assignments including MG-inherited, with compliance state |
 | **Policy Recs**     | CAF-aligned built-in policies & initiatives | Missing cost, tagging, security, and monitoring policies with deploy-from-GUI capability |
-| **Policy Deploy**   | ARM Policy Assignment API (PUT)   | Deploy recommended policies with desired effect (Audit/Deny/etc.) |
+| **Policy Deploy**   | ARM Policy Assignment API (PUT/DELETE) | Inline Deploy/Unassign buttons per policy in the recommendations grid |
 | **Policy Remediation** | Policy Insights API (2021-10-01) | Trigger remediation tasks for DeployIfNotExists/Modify policy assignments |
 | **Budget Policy**   | ARM Policy Assignment API (PUT)   | Deploy budget enforcement policies (AuditIfNotExists / DeployIfNotExists) at subscription or MG scope |
 | **Billing**         | Billing Accounts/Profiles API     | Billing accounts, profiles, invoice sections, EA depts     |
@@ -127,7 +127,7 @@ powershell -ExecutionPolicy Bypass -File .\Start-FinOpsMultitool.ps1
 5. When done, browse the tabs:
    - **Overview** — cost summary cards, savings realized, budget status, subscription cost table (with orphan savings), top resources by spend, subscription scorecard
    - **Cost Analysis** -- 6-month cost trend bar chart, cost anomaly flags (25%+ MoM change), pick a tag from the dropdown to see spend by tag value
-   - **Tags** -- tag inventory with unique values, coverage %, CAF compliance check, clickable missing tag buttons to deploy tags directly to subscriptions/RGs
+   - **Tags** -- tag inventory with unique values, coverage %, CAF compliance check, inline Add/Remove buttons per tag to deploy or remove tags directly on subscriptions/RGs
    - **Policy** -- policy and initiative assignment inventory, compliance %, CAF-recommended policies and initiatives, clickable buttons to deploy policies with desired effect, remediation tasks for DINE/Modify policies
    - **Optimization** -- commitment utilization (RI/SP %), orphaned/idle resources with cost data and estimated annual waste, AHB gaps, RI recs, SP recs, Advisor recs
    - **Billing** -- billing accounts, billing profiles (MCA), invoice sections, EA departments, cost allocation rules
@@ -245,8 +245,11 @@ a `DispatcherTimer` so the UI updates between stages.
 | Contract type quotaId fallback | Infers EA/MCA/PAYGO/Internal from ARM subscription quotaId when Billing API is inaccessible |
 | 4-column optimization grids | Each recommendation shows Actual (MTD), Forecast, With-X savings, and Annual Savings |
 | Pure WPF bar chart | Cost trend drawn with Canvas + Rectangles — no NuGet charting libraries needed |
-| Tag deployment via ARM Tags API | PATCH merge preserves existing tags; only adds/updates the target tag |
+| Tag deployment via ARM Tags API | PATCH merge to add/update; PATCH delete to remove tags; preserves other existing tags |
+| Tag removal via ARM Tags API | Delete operation removes a single tag by name without affecting other tags |
 | Policy deployment via ARM PUT | Deploy recommended FinOps policies with user-selected effect (Audit/Deny/etc.) |
+| Policy unassignment via ARM DELETE | Remove policy assignments directly from the recommendations grid |
+| Inline action buttons in grids | Tag and policy recommendation grids use programmatic TemplateColumns with Add/Remove and Deploy/Unassign buttons per row |
 | Policy remediation via REST | Trigger remediation tasks for DeployIfNotExists/Modify assignments via Policy Insights API (2021-10-01) |
 | Budget policy deployment | Deploy budget enforcement policies (AuditIfNotExists / DeployIfNotExists) at subscription or MG scope from the Budgets tab |
 | User-defined budget thresholds | Budget deploy supports up to 4 threshold entries with Actual/Forecasted type selectors |
@@ -375,6 +378,8 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 - [x] ~~Orphan savings in scorecard~~ — Subscription scorecard and cost table show estimated annual waste from orphaned resources
 - [x] ~~Tag inventory includes subscription/RG-level tags~~ — Resource Graph queries union `resourcecontainers` table
 - [x] ~~Dev/Test subscription inclusion~~ — Dev/Test subs are no longer excluded from scans
+- [x] ~~Inline tag management~~ — Add/Remove buttons directly in the tag recommendations grid
+- [x] ~~Inline policy management~~ — Deploy/Unassign buttons directly in the policy recommendations grid
 
 ---
 
@@ -448,6 +453,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v1.9.0
+- **Inline tag Add/Remove buttons** — Tag recommendations grid now has per-row action buttons: green Add for missing tags, red Remove for present tags (replaces separate button section)
+- **Inline policy Deploy/Unassign buttons** — Policy recommendations grid now has per-row action buttons: Deploy for missing policies, Unassign for assigned policies (replaces separate button section)
+- **Tag removal** — Remove tags from subscriptions and resource groups via ARM Tags API Delete operation
+- **Policy unassignment** — Remove policy assignments via ARM REST API DELETE
 
 ### v1.8.0
 - **Separate Commercial / Gov tenant buttons** — Replaced auto-probing with explicit Commercial Tenant and Gov Tenant buttons; Gov cloud is now opt-in

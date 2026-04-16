@@ -92,6 +92,78 @@ function Deploy-ResourceTag {
     }
 }
 
+function Remove-ResourceTag {
+    <#
+    .SYNOPSIS
+    Removes a tag from a subscription or resource group via ARM Tags API (DELETE operation).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Scope,
+
+        [Parameter(Mandatory)]
+        [string]$TagName
+    )
+
+    Write-Host "  Removing tag '$TagName' from scope: $Scope" -ForegroundColor Cyan
+
+    $uri = "https://management.azure.com$Scope/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
+
+    $body = @{
+        operation  = 'Delete'
+        properties = @{
+            tags = @{
+                $TagName = ''
+            }
+        }
+    } | ConvertTo-Json -Depth 5
+
+    $token = Get-PlainAccessToken
+    $headers = @{
+        'Authorization' = "Bearer $token"
+        'Content-Type'  = 'application/json'
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri $uri -Method PATCH -Body $body -Headers $headers `
+            -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        if ([int]$response.StatusCode -in @(200, 201)) {
+            Write-Host "    Tag removed successfully." -ForegroundColor Green
+            return [PSCustomObject]@{
+                Success    = $true
+                Message    = "Tag '$TagName' removed from $Scope"
+                StatusCode = [int]$response.StatusCode
+            }
+        } else {
+            $errBody = ($response.Content | ConvertFrom-Json -ErrorAction SilentlyContinue)
+            $errMsg = if ($errBody.error) { $errBody.error.message } else { "HTTP $($response.StatusCode)" }
+            return [PSCustomObject]@{
+                Success    = $false
+                Message    = $errMsg
+                StatusCode = [int]$response.StatusCode
+            }
+        }
+    } catch {
+        $errMsg  = $_.Exception.Message
+        $statusCode = 0
+        if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            try {
+                $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                $errContent = $sr.ReadToEnd(); $sr.Close()
+                $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($errBody.error) { $errMsg = $errBody.error.message }
+            } catch {}
+        }
+        return [PSCustomObject]@{
+            Success    = $false
+            Message    = $errMsg
+            StatusCode = $statusCode
+        }
+    }
+}
+
 function Get-TagScopes {
     <#
     .SYNOPSIS
