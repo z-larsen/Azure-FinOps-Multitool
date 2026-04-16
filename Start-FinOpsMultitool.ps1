@@ -319,7 +319,8 @@ $controls = @(
     'TagCountText', 'TagCoverageText', 'UntaggedCountText',
     'TagInventoryGrid', 'TagComplianceText', 'TagRecsGrid',
     'UntaggedNote', 'UntaggedResourcesGrid',
-    'TagDeployPanel', 'TagDeployTitle',
+    'CustomTagButton', 'TagDeployPanel', 'TagDeployTitle',
+    'TagNameLabel', 'TagNameInput',
     'TagScopeSelector', 'TagValueInput', 'TagDeployButton',
     'TagDeployCancelButton', 'TagDeployStatus',
     # Overview - Budget & Scorecard
@@ -1805,26 +1806,9 @@ $script:tagDeployCurrentTag = $null
 $script:tagDeployScopesLoaded = $false
 $script:tagDeployScopes = @()
 $script:tagRemoveMode = $false
+$script:tagCustomMode = $false
 
-function Show-TagDeployPanel {
-    param([string]$TagName)
-
-    $script:tagDeployCurrentTag = $TagName
-    $script:tagRemoveMode = $false
-    $script:TagDeployTitle.Text = "Deploy tag: $TagName"
-    $script:TagDeployStatus.Text = ''
-    $script:TagValueInput.Text = ''
-    $script:TagValueInput.Visibility = 'Visible'
-    # Show the tag value label
-    $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
-    if ($valIdx -gt 0) {
-        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Visible'
-    }
-    $script:TagDeployButton.Content = 'Deploy Tag'
-    $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4')
-    $script:TagDeployPanel.Visibility = 'Visible'
-
-    # Load scopes lazily (once per scan)
+function Load-TagScopes {
     if (-not $script:tagDeployScopesLoaded -and $script:scanData.Auth) {
         $script:TagDeployStatus.Text = 'Loading scopes...'
         [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
@@ -1844,14 +1828,63 @@ function Show-TagDeployPanel {
     }
 }
 
+function Show-TagDeployPanel {
+    param([string]$TagName)
+
+    $script:tagDeployCurrentTag = $TagName
+    $script:tagRemoveMode = $false
+    $script:tagCustomMode = $false
+    $script:TagDeployTitle.Text = "Deploy tag: $TagName"
+    $script:TagDeployStatus.Text = ''
+    $script:TagValueInput.Text = ''
+    $script:TagValueInput.Visibility = 'Visible'
+    $script:TagNameInput.Visibility = 'Collapsed'
+    $script:TagNameLabel.Visibility = 'Collapsed'
+    # Show the tag value label
+    $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
+    if ($valIdx -gt 0) {
+        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Visible'
+    }
+    $script:TagDeployButton.Content = 'Deploy Tag'
+    $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4')
+    $script:TagDeployPanel.Visibility = 'Visible'
+
+    Load-TagScopes
+}
+
+function Show-CustomTagDeployPanel {
+    $script:tagDeployCurrentTag = $null
+    $script:tagRemoveMode = $false
+    $script:tagCustomMode = $true
+    $script:TagDeployTitle.Text = "Deploy Custom Tag"
+    $script:TagDeployStatus.Text = ''
+    $script:TagNameInput.Text = ''
+    $script:TagNameInput.Visibility = 'Visible'
+    $script:TagNameLabel.Visibility = 'Visible'
+    $script:TagValueInput.Text = ''
+    $script:TagValueInput.Visibility = 'Visible'
+    $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
+    if ($valIdx -gt 0) {
+        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Visible'
+    }
+    $script:TagDeployButton.Content = 'Deploy Tag'
+    $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0078D4')
+    $script:TagDeployPanel.Visibility = 'Visible'
+
+    Load-TagScopes
+}
+
 function Show-TagRemovePanel {
     param([string]$TagName)
 
     $script:tagDeployCurrentTag = $TagName
     $script:tagRemoveMode = $true
+    $script:tagCustomMode = $false
     $script:TagDeployTitle.Text = "Remove tag: $TagName"
     $script:TagDeployStatus.Text = ''
     $script:TagValueInput.Visibility = 'Collapsed'
+    $script:TagNameInput.Visibility = 'Collapsed'
+    $script:TagNameLabel.Visibility = 'Collapsed'
     # Hide the tag value label (previous sibling)
     $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
     if ($valIdx -gt 0) {
@@ -1861,23 +1894,7 @@ function Show-TagRemovePanel {
     $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D13438')
     $script:TagDeployPanel.Visibility = 'Visible'
 
-    # Load scopes lazily
-    if (-not $script:tagDeployScopesLoaded -and $script:scanData.Auth) {
-        $script:TagDeployStatus.Text = 'Loading scopes...'
-        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-            [action]{}, [System.Windows.Threading.DispatcherPriority]::Background
-        )
-        $script:tagDeployScopes = Get-TagScopes -Subscriptions $script:scanData.Auth.Subscriptions
-        $script:tagDeployScopesLoaded = $true
-        $script:TagDeployStatus.Text = ''
-    }
-
-    $script:TagScopeSelector.Items.Clear()
-    foreach ($s in $script:tagDeployScopes) {
-        $script:TagScopeSelector.Items.Add($s.DisplayName) | Out-Null
-    }
-    if ($script:tagDeployScopes.Count -gt 0) {
-        $script:TagScopeSelector.SelectedIndex = 0
+    Load-TagScopes
     }
 }
 
@@ -3519,9 +3536,20 @@ $script:TagSelector.Add_SelectionChanged({
     }
 })
 
-# Tag Deploy Button (handles both Add and Remove modes)
+# Tag Deploy Button (handles Add, Remove, and Custom modes)
 $script:TagDeployButton.Add_Click({
     $tagName = $script:tagDeployCurrentTag
+
+    # In custom mode, read tag name from the input
+    if ($script:tagCustomMode) {
+        $tagName = $script:TagNameInput.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($tagName)) {
+            $script:TagDeployStatus.Text = 'Please enter a tag name.'
+            return
+        }
+        $script:tagDeployCurrentTag = $tagName
+    }
+
     $selectedIdx = $script:TagScopeSelector.SelectedIndex
 
     if (-not $tagName) {
@@ -3708,6 +3736,11 @@ $script:TagDeployButton.Add_Click({
 $script:TagDeployCancelButton.Add_Click({
     $script:TagDeployPanel.Visibility = 'Collapsed'
     $script:tagDeployCurrentTag = $null
+})
+
+# Deploy Custom Tag Button
+$script:CustomTagButton.Add_Click({
+    Show-CustomTagDeployPanel
 })
 
 # Policy Deploy / Unassign Button (handles both modes)

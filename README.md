@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 1.9.0](https://img.shields.io/badge/Version-1.9.0-brightgreen)
+![Version 1.9.1](https://img.shields.io/badge/Version-1.9.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -350,7 +350,7 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 
 ### Near-term
 
-- [ ] Custom tag deployment (user-defined tags, not just CAF recommendations)
+- [x] ~~Custom tag deployment~~ — Deploy any user-defined tag from the Tags tab
 - [ ] PDF export with charts
 - [ ] Scheduled/headless scan mode with email report delivery
 
@@ -453,6 +453,9 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v1.9.1
+- **Custom tag deployment** — Deploy any user-defined tag (name + value) to subscriptions or resource groups via the new "Deploy Custom Tag" button on the Tags tab
 
 ### v1.9.0
 - **Inline tag Add/Remove buttons** — Tag recommendations grid now has per-row action buttons: green Add for missing tags, red Remove for present tags (replaces separate button section)
