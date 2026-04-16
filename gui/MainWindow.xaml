@@ -81,6 +81,7 @@
             <Setter Property="SelectionMode" Value="Single"/>
             <Setter Property="CanUserSortColumns" Value="True"/>
             <Setter Property="FontSize" Value="12"/>
+            <Setter Property="ColumnWidth" Value="*"/>
             <Setter Property="EnableRowVirtualization" Value="True"/>
             <Setter Property="EnableColumnVirtualization" Value="True"/>
             <Setter Property="VirtualizingStackPanel.IsVirtualizing" Value="True"/>
@@ -118,7 +119,7 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
-                        <TextBlock x:Name="VersionLabel" Text="v1.9.8" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                        <TextBlock x:Name="VersionLabel" Text="v1.9.9" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
                     </StackPanel>
                     <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
@@ -535,7 +536,7 @@
                             <TextBlock Text="Budget Management" Style="{StaticResource SectionHeader}"/>
                             <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="0,0,0,4">
                                 Azure Budgets let you set a spending cap for a subscription and receive email alerts when spend crosses defined thresholds.
-                                Budgets do NOT stop spending — they provide visibility so you can act before costs exceed expectations.
+                                Budgets do NOT stop spending &#x2014; they provide visibility so you can act before costs exceed expectations.
                                 Best practice: set thresholds at 25%, 50%, 80%, and 100% so stakeholders get early warnings.
                             </TextBlock>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#999" Margin="0,0,0,12">

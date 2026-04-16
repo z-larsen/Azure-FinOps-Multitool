@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 1.9.8](https://img.shields.io/badge/Version-1.9.8-brightgreen)
+![Version 1.9.9](https://img.shields.io/badge/Version-1.9.9-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -453,6 +453,10 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v1.9.9
+- **DataGrid columns scale with window** — all grids now use Star sizing so columns fill available width; Location, Purpose, Scope, and Assignment Name columns wrap text
+- **Fix garbled em dash** — replaced literal em dash in XAML with XML entity `&#x2014;` to prevent encoding issues
 
 ### v1.9.8
 - **Mass tag removal includes resources** — "[ALL]" removal now uses Resource Graph to find individual resources with the tag and removes from sub + RGs + resources in one click

@@ -698,7 +698,11 @@ function Populate-TagsTab {
             $dgCol = [System.Windows.Controls.DataGridTextColumn]::new()
             $dgCol.Header = $col
             $dgCol.Binding = [System.Windows.Data.Binding]::new($col)
-            if ($col -eq 'Purpose') { $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star) }
+            if ($col -in @('Location','Purpose')) {
+                $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star)
+                $dgCol.ElementStyle = [System.Windows.Style]::new([System.Windows.Controls.TextBlock])
+                $dgCol.ElementStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::TextWrappingProperty, [System.Windows.TextWrapping]::Wrap))
+            }
             $script:TagRecsGrid.Columns.Add($dgCol)
         }
 
@@ -1934,7 +1938,11 @@ function Populate-PolicyTab {
             $dgCol = [System.Windows.Controls.DataGridTextColumn]::new()
             $dgCol.Header = $col
             $dgCol.Binding = [System.Windows.Data.Binding]::new($col)
-            if ($col -eq 'Scope') { $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star) }
+            if ($col -in @('Assignment Name','Scope')) {
+                $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star)
+                $dgCol.ElementStyle = [System.Windows.Style]::new([System.Windows.Controls.TextBlock])
+                $dgCol.ElementStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::TextWrappingProperty, [System.Windows.TextWrapping]::Wrap))
+            }
             $script:PolicyInventoryGrid.Columns.Add($dgCol)
         }
 
@@ -2072,7 +2080,11 @@ function Populate-PolicyTab {
             $dgCol = [System.Windows.Controls.DataGridTextColumn]::new()
             $dgCol.Header = $col
             $dgCol.Binding = [System.Windows.Data.Binding]::new($col)
-            if ($col -eq 'Purpose') { $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star) }
+            if ($col -eq 'Purpose') {
+                $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star)
+                $dgCol.ElementStyle = [System.Windows.Style]::new([System.Windows.Controls.TextBlock])
+                $dgCol.ElementStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::TextWrappingProperty, [System.Windows.TextWrapping]::Wrap))
+            }
             $script:PolicyRecsGrid.Columns.Add($dgCol)
         }
 
