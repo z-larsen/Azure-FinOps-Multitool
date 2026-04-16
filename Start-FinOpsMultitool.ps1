@@ -1886,14 +1886,17 @@ function Show-TagRemovePanel {
     $script:tagCustomMode = $false
     $script:TagDeployTitle.Text = "Remove tag: $TagName"
     $script:TagDeployStatus.Text = ''
-    $script:TagValueInput.Visibility = 'Collapsed'
     $script:TagNameInput.Visibility = 'Collapsed'
     $script:TagNameLabel.Visibility = 'Collapsed'
-    # Hide the tag value label (previous sibling)
+
+    # Show value input as optional filter
     $valIdx = $script:TagDeployPanel.Child.Children.IndexOf($script:TagValueInput)
     if ($valIdx -gt 0) {
-        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Collapsed'
+        $script:TagDeployPanel.Child.Children[$valIdx - 1].Text = 'Value Filter (blank = all values):'
+        $script:TagDeployPanel.Child.Children[$valIdx - 1].Visibility = 'Visible'
     }
+    $script:TagValueInput.Text = ''
+    $script:TagValueInput.Visibility = 'Visible'
     $script:TagDeployButton.Content = 'Remove Tag'
     $script:TagDeployButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D13438')
     $script:TagDeployPanel.Visibility = 'Visible'
@@ -3762,8 +3765,9 @@ $script:TagDeployButton.Add_Click({
 
     if ($script:tagRemoveMode) {
         # REMOVE TAG (single or mass)
-        $scopeCount = $targetScopes.Count
-        $script:TagDeployStatus.Text = if ($massRemove) { "Removing from sub, RGs, and resources..." } else { 'Removing...' }
+        $valueFilter = $script:TagValueInput.Text.Trim()
+        $filterLabel = if ($valueFilter) { " (value='$valueFilter')" } else { '' }
+        $script:TagDeployStatus.Text = if ($massRemove) { "Removing$filterLabel from sub, RGs, and resources..." } else { "Removing$filterLabel..." }
         $script:TagDeployStatus.Foreground = [System.Windows.Media.Brushes]::Gray
 
         try {
@@ -3783,35 +3787,65 @@ $script:TagDeployButton.Add_Click({
         $ps = [powershell]::Create()
         $ps.Runspace = $rs
         [void]$ps.AddScript({
-            param($deployScopeList, $deployTagName, $deployToken, $massMode, $subscriptionId)
+            param($deployScopeList, $deployTagName, $deployToken, $massMode, $subscriptionId, $valueFilter)
             $successCount = 0
             $failCount = 0
             $failMsg = ''
             $baseUri = 'https://management.azure.com'
+            $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
 
-            # If mass mode, also find individual resources with this tag via Resource Graph
+            # If mass mode, find individual resources via Resource Graph (with pagination)
             if ($massMode -and $subscriptionId) {
                 try {
-                    $query = "resources | where isnotnull(tags['$deployTagName']) | project id"
-                    $rgBody = @{
-                        subscriptions = @($subscriptionId)
-                        query         = $query
-                        options       = @{ '$top' = 1000 }
-                    } | ConvertTo-Json -Depth 5
-                    $rgUri = "$baseUri/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-                    $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
-                    $rgResp = Invoke-WebRequest -Uri $rgUri -Method Post -Body $rgBody -Headers $hdrs `
-                        -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
-                    $rgData = ($rgResp.Content | ConvertFrom-Json)
-                    if ($rgData.data) {
-                        foreach ($row in $rgData.data) {
-                            if ($row.id -and ($row.id -notin $deployScopeList)) {
-                                $deployScopeList += $row.id
+                    if ($valueFilter) {
+                        $query = "resources | where tags['$deployTagName'] == '$valueFilter' | project id"
+                    } else {
+                        $query = "resources | where isnotnull(tags['$deployTagName']) | project id"
+                    }
+                    $skipToken = $null
+                    do {
+                        $rgBody = @{
+                            subscriptions = @($subscriptionId)
+                            query         = $query
+                            options       = @{ '$top' = 1000 }
+                        }
+                        if ($skipToken) { $rgBody.options['$skipToken'] = $skipToken }
+                        $rgBodyJson = $rgBody | ConvertTo-Json -Depth 5
+                        $rgUri = "$baseUri/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
+                        $rgResp = Invoke-WebRequest -Uri $rgUri -Method Post -Body $rgBodyJson -Headers $hdrs `
+                            -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+                        $rgData = ($rgResp.Content | ConvertFrom-Json)
+                        if ($rgData.data) {
+                            foreach ($row in $rgData.data) {
+                                if ($row.id -and ($row.id -notin $deployScopeList)) {
+                                    $deployScopeList += $row.id
+                                }
                             }
                         }
-                    }
+                        $skipToken = $rgData.'$skipToken'
+                    } while ($skipToken)
                 } catch {
                     # Resource Graph query failed — continue with sub/RG scopes only
+                }
+
+                # If value filter is set, also filter sub/RG scopes — only remove from those where tag has the specific value
+                if ($valueFilter) {
+                    $filteredScopes = @()
+                    foreach ($s in $deployScopeList) {
+                        try {
+                            $tagUri = "$baseUri$s/providers/Microsoft.Resources/tags/default?api-version=2021-04-01"
+                            $tagResp = Invoke-WebRequest -Uri $tagUri -Method Get -Headers $hdrs `
+                                -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+                            $tagData = ($tagResp.Content | ConvertFrom-Json)
+                            if ($tagData.properties.tags.$deployTagName -eq $valueFilter) {
+                                $filteredScopes += $s
+                            }
+                        } catch {
+                            # Can't read tags — include scope anyway to attempt removal
+                            $filteredScopes += $s
+                        }
+                    }
+                    $deployScopeList = $filteredScopes
                 }
             }
 
@@ -3841,7 +3875,7 @@ $script:TagDeployButton.Add_Click({
                 }
             }
             [PSCustomObject]@{ SuccessCount = $successCount; FailCount = $failCount; FailMsg = $failMsg }
-        }).AddArgument($allScopes).AddArgument($tagName).AddArgument($token).AddArgument($massRemove).AddArgument($subId)
+        }).AddArgument($allScopes).AddArgument($tagName).AddArgument($token).AddArgument($massRemove).AddArgument($subId).AddArgument($valueFilter)
 
         $asyncResult = $ps.BeginInvoke()
         $deadline = (Get-Date).AddSeconds(300)

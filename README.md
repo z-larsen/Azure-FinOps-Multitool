@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 1.9.12](https://img.shields.io/badge/Version-1.9.12-brightgreen)
+![Version 1.9.13](https://img.shields.io/badge/Version-1.9.13-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -453,6 +453,10 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v1.9.13
+- **Tag removal value filter** — remove panel now shows a "Value Filter" field; leave blank to remove the tag key from all scopes, or enter a specific value to only remove from resources where the tag matches that value
+- **Resource Graph pagination** — mass tag removal now pages through all results (not capped at 1000)
 
 ### v1.9.12
 - **Action Group support for budgets** — budget deploy now has an Action Group dropdown populated from all subscriptions; selected action group is attached to all threshold notifications via `contactGroups`
