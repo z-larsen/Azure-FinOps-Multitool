@@ -1895,7 +1895,6 @@ function Show-TagRemovePanel {
     $script:TagDeployPanel.Visibility = 'Visible'
 
     Load-TagScopes
-    }
 }
 
 #-----------------------------------------------------------------------
