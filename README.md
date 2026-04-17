@@ -348,6 +348,7 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 - [x] ~~Storage tier optimization~~ — Hot-tier storage accounts flagged for Cool/Archive migration
 - [x] ~~Resources tab~~ — Curated links to FinOps Framework, Azure Workbooks, orphaned resources workbook
 - [x] ~~Tag Inventory Remove button~~ — Delete any tag directly from the Tag Inventory grid
+- [x] ~~Session action log in HTML report~~ — Exported reports include tags deployed/removed and policies assigned/unassigned during the session
 
 ---
 
@@ -422,13 +423,27 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 
 ## Changelog
 
-### v2.0.0
-- **Idle & underutilized VM detection** — 14-day Azure Monitor metrics (CPU + network) flag running VMs that Advisor missed
-- **Storage tier optimization** — identifies hot-tier storage accounts with low activity for Cool/Archive migration (50-90% savings)
-- **Resources tab** — curated links to FinOps Framework, Cost Management, Azure Workbooks, and the orphaned resources workbook
+### v2.0.0 — Major Release
+
+Major version bump driven by the **Power BI template (.pbit) export**, which transforms the tool from a one-time scanner into a reusable reporting platform. Double-click the generated `.pbit` to open a fully styled 4-page dashboard in Power BI Desktop with all tables, relationships, and measures pre-configured.
+
+**New features:**
+- **Power BI template (.pbit) export** — generates a `.pbit` alongside CSVs with a pre-built 4-page report layout (Cost Overview, Subscriptions, Optimization, Governance); connects via a `CsvFolderPath` parameter
+- **Unified export dialog** — single "Export Scan Results" button opens a tile-based chooser (HTML, CSV, Power BI) instead of separate buttons
+- **Idle & underutilized VM detection** — 14-day Azure Monitor metrics (CPU + network) flag running VMs that Advisor missed; catches candidates beyond what Advisor surfaces
+- **Storage tier optimization** — identifies hot-tier storage accounts with low transaction activity for Cool/Archive migration (50-90% savings)
+- **Resources tab** — curated links organized into 5 categories: FinOps Framework, Cost Management, Rate Optimization, Governance, and Workbooks & Tools
 - **Tag Inventory Remove button** — delete any tag directly from the Tag Inventory grid
-- **Tag removal retry** — automatic retry with backoff on 500 errors during tag removal
-- Minor Power BI export changes
+- **Session action log in HTML report** — exported HTML reports now include a "10. Actions Taken" section showing all tags deployed/removed and policies assigned/unassigned during the session
+
+**Bug fixes & improvements:**
+- **Tag removal case-insensitive** — Resource Graph queries now use `tolower()` for tag key lookup, fixing false "tag not found" results when casing differed
+- **Tag removal includes subscription/RG-level tags** — KQL queries union the `resourcecontainers` table so tags applied at subscription or resource group scope are found and removed
+- **Tag removal resolves actual casing** — before each DELETE, the tool reads the resource's actual tag keys via GET and uses the exact casing, preventing silent failures from case mismatches in the API body
+- **Tag removal retry with backoff** — automatic retry (3 attempts, 1s/2s exponential backoff) on 500 errors during tag removal; error messages now include the failing resource name
+- **Deploy Custom Tag repositioned** — moved from after Tag Recommendations to directly below the Tag Inventory table for better workflow
+- **Resources tab link rendering fix** — fixed array flattening bug that caused empty link panels
+- **References consolidated** — removed standalone References section from FinOps Guidance tab; content moved to the new Resources tab
 
 ### v1.9.18
 - **Fix tag removal for variants** — Remove button on Tag Recommendations now deletes the actual tag name found in Azure (e.g. `Application` instead of the recommended `ApplicationName`), resolving the issue where removal reported success but tags remained
