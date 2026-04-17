@@ -3513,9 +3513,13 @@ function Export-PowerBIData {
     $modelJson = $sb.ToString()
 
     # Clone skeleton .pbit and inject our DataModelSchema
-    $skelPath = Join-Path $script:ScriptRootDir 'gui' 'skeleton.pbit'
+    $rootDir = $script:ScriptRootDir
+    if (-not $rootDir) { $rootDir = $PSScriptRoot }
+    if (-not $rootDir) { $rootDir = Split-Path -Parent $MyInvocation.ScriptName }
+    if (-not $rootDir) { $rootDir = Split-Path -Parent (Get-Item $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue).FullName }
+    $skelPath = Join-Path (Join-Path $rootDir 'gui') 'skeleton.pbit'
     if (-not (Test-Path $skelPath)) {
-        [System.Windows.MessageBox]::Show("skeleton.pbit not found at:`n$skelPath", 'Power BI Export Error', 'OK', 'Error')
+        [System.Windows.MessageBox]::Show("skeleton.pbit not found at:`n$skelPath`n`nScriptRootDir=$($script:ScriptRootDir)`nPSScriptRoot=$PSScriptRoot", 'Power BI Export Error', 'OK', 'Error')
         return
     }
     $pbitPath = Join-Path $exportDir 'FinOps-Report.pbit'
