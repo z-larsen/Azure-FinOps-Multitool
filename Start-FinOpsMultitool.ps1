@@ -662,6 +662,47 @@ function Populate-TagsTab {
         $script:UntaggedCountText.Text = $d.Tags.UntaggedCount.ToString('N0')
 
         # Inventory grid - preserve all tag value casing variants for discovery
+        $script:TagInventoryGrid.AutoGenerateColumns = $false
+        $script:TagInventoryGrid.Columns.Clear()
+
+        # Data columns
+        foreach ($col in @('Tag Name','Resources','Unique Values','Values')) {
+            $dgCol = [System.Windows.Controls.DataGridTextColumn]::new()
+            $dgCol.Header = $col
+            $dgCol.Binding = [System.Windows.Data.Binding]::new($col)
+            if ($col -eq 'Values') {
+                $dgCol.Width = [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star)
+                $dgCol.ElementStyle = [System.Windows.Style]::new([System.Windows.Controls.TextBlock])
+                $dgCol.ElementStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::TextWrappingProperty, [System.Windows.TextWrapping]::Wrap))
+            }
+            $script:TagInventoryGrid.Columns.Add($dgCol)
+        }
+
+        # Action button template column (Remove)
+        $invActionCol = [System.Windows.Controls.DataGridTemplateColumn]::new()
+        $invActionCol.Header = 'Action'
+        $invActionCol.Width = 75
+
+        $invCellFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.Button])
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::ContentProperty, 'Remove')
+        $invCellFactory.SetBinding([System.Windows.Controls.Button]::TagProperty, [System.Windows.Data.Binding]::new('Tag Name'))
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::FontSizeProperty, [double]10)
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::PaddingProperty, [System.Windows.Thickness]::new(6,1,6,1))
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::MarginProperty, [System.Windows.Thickness]::new(2,1,2,1))
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::BorderThicknessProperty, [System.Windows.Thickness]::new(1))
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::BackgroundProperty, [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FDE7E9'))
+        $invCellFactory.SetValue([System.Windows.Controls.Button]::ForegroundProperty, [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D13438'))
+        $invCellFactory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
+            param($sender, $e)
+            Show-TagRemovePanel -TagName $sender.Tag
+        })
+
+        $invCellTemplate = [System.Windows.DataTemplate]::new()
+        $invCellTemplate.VisualTree = $invCellFactory
+        $invActionCol.CellTemplate = $invCellTemplate
+        $script:TagInventoryGrid.Columns.Add($invActionCol)
+
         $tagRows = @()
         foreach ($entry in $d.Tags.TagNames.GetEnumerator()) {
             $allValues = @($entry.Value.Values | ForEach-Object { $_.Value })
@@ -4402,16 +4443,33 @@ $script:TagDeployButton.Add_Click({
                     properties = @{ tags = @{ $deployTagName = '' } }
                 } | ConvertTo-Json -Depth 5
                 $hdrs = @{ 'Authorization' = "Bearer $deployToken"; 'Content-Type' = 'application/json' }
-                try {
-                    $resp = Invoke-WebRequest -Uri $uri -Method Patch -Body $body -Headers $hdrs `
-                        -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-                    $successCount++
-                } catch {
+                $succeeded = $false
+                $lastErr = $null
+                for ($retryAttempt = 0; $retryAttempt -lt 3; $retryAttempt++) {
+                    try {
+                        $resp = Invoke-WebRequest -Uri $uri -Method Patch -Body $body -Headers $hdrs `
+                            -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+                        $successCount++
+                        $succeeded = $true
+                        break
+                    } catch {
+                        $lastErr = $_
+                        $statusCode = 0
+                        if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+                            $statusCode = [int]$_.Exception.Response.StatusCode
+                        }
+                        if ($statusCode -ge 500 -and $retryAttempt -lt 2) {
+                            Start-Sleep -Milliseconds (1000 * ($retryAttempt + 1))
+                            continue
+                        }
+                    }
+                }
+                if (-not $succeeded) {
                     $failCount++
-                    $errMsg = $_.Exception.Message
-                    if ($_.Exception -is [System.Net.WebException] -and $_.Exception.Response) {
+                    $errMsg = $lastErr.Exception.Message
+                    if ($lastErr.Exception -is [System.Net.WebException] -and $lastErr.Exception.Response) {
                         try {
-                            $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                            $sr = [System.IO.StreamReader]::new($lastErr.Exception.Response.GetResponseStream())
                             $errContent = $sr.ReadToEnd(); $sr.Close()
                             $errBody = $errContent | ConvertFrom-Json -ErrorAction SilentlyContinue
                             if ($errBody.error) { $errMsg = $errBody.error.message }
