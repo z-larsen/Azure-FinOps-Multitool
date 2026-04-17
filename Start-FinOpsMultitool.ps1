@@ -268,6 +268,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Dot-Source Modules -------------------------------------------------
+$script:ScriptRootDir = $PSScriptRoot
 $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Initialize-Scanner.ps1')
 . (Join-Path $modulePath 'Get-TenantHierarchy.ps1')
@@ -3512,14 +3513,23 @@ function Export-PowerBIData {
     $modelJson = $sb.ToString()
 
     # Clone skeleton .pbit and inject our DataModelSchema
-    $skelPath = Join-Path $PSScriptRoot 'gui' 'skeleton.pbit'
+    $skelPath = Join-Path $script:ScriptRootDir 'gui' 'skeleton.pbit'
+    if (-not (Test-Path $skelPath)) {
+        [System.Windows.MessageBox]::Show("skeleton.pbit not found at:`n$skelPath", 'Power BI Export Error', 'OK', 'Error')
+        return
+    }
     $pbitPath = Join-Path $exportDir 'FinOps-Report.pbit'
     Copy-Item $skelPath $pbitPath -Force
+    if ((Get-Item $pbitPath).Length -lt 1000) {
+        [System.Windows.MessageBox]::Show("skeleton.pbit copy failed — file too small.`nSource: $skelPath`nDest: $pbitPath", 'Power BI Export Error', 'OK', 'Error')
+        return
+    }
 
     $unicodeNoBom = [System.Text.UnicodeEncoding]::new($false, $false)
     $zip = [System.IO.Compression.ZipFile]::Open($pbitPath, [System.IO.Compression.ZipArchiveMode]::Update)
     try {
-        $dmEntry = $zip.Entries | Where-Object { $_.Name -eq 'DataModelSchema' }
+        $dmEntry = $zip.Entries | Where-Object { $_.FullName -eq 'DataModelSchema' }
+        if (-not $dmEntry) { throw 'DataModelSchema entry not found in skeleton' }
         $dmName = $dmEntry.FullName
         $dmEntry.Delete()
         $newDm = $zip.CreateEntry($dmName)
