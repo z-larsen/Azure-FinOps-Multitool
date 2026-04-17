@@ -435,6 +435,8 @@ Major version bump driven by the **Power BI template (.pbit) export**, which tra
 - **Resources tab** — curated links organized into 5 categories: FinOps Framework, Cost Management, Rate Optimization, Governance, and Workbooks & Tools
 - **Tag Inventory Remove button** — delete any tag directly from the Tag Inventory grid
 - **Session action log in HTML report** — exported HTML reports now include a "10. Actions Taken" section showing all tags deployed/removed and policies assigned/unassigned during the session
+- **Tag Inventory in HTML report** — exported HTML reports now include the full tag inventory table with resource counts, unique value counts, and sample values
+- **Policy Assignment Inventory in HTML report** — exported HTML reports now include the full policy assignment inventory with type, effect, enforcement mode, origin, and subscription
 
 **Bug fixes & improvements:**
 - **Tag removal case-insensitive** — Resource Graph queries now use `tolower()` for tag key lookup, fixing false "tag not found" results when casing differed
