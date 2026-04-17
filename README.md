@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 1.9.20](https://img.shields.io/badge/Version-1.9.20-brightgreen)
+![Version 2.0.0](https://img.shields.io/badge/Version-2.0.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -406,7 +406,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 
 ## Changelog
 
-### v1.9.20
+### v2.0.0
+- **Idle & underutilized VM detection** — 14-day Azure Monitor metrics (CPU + network) flag running VMs that Advisor missed
+- **Storage tier optimization** — identifies hot-tier storage accounts with low activity for Cool/Archive migration (50-90% savings)
+- **Resources tab** — curated links to FinOps Framework, Cost Management, Azure Workbooks, and the orphaned resources workbook
+- **Tag Inventory Remove button** — delete any tag directly from the Tag Inventory grid
+- **Tag removal retry** — automatic retry with backoff on 500 errors during tag removal
 - Minor Power BI export changes
 
 ### v1.9.18
