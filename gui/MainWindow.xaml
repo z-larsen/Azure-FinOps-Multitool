@@ -305,17 +305,6 @@
                             <TextBlock Text="Tag Inventory" Style="{StaticResource SectionHeader}"/>
                             <DataGrid x:Name="TagInventoryGrid" MaxHeight="250"/>
 
-                            <!-- Untagged Resources -->
-                            <TextBlock Text="Untagged Resources" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock x:Name="UntaggedNote" Text="" FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
-                            <DataGrid x:Name="UntaggedResourcesGrid" MaxHeight="350"/>
-
-                            <!-- Tag Recommendations -->
-                            <TextBlock Text="Tag Recommendations (Cloud Adoption Framework)" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock x:Name="TagComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>
-                            <TextBlock Text="Click Add to deploy a missing tag or Remove to delete a present tag from a scope." FontSize="12" Foreground="#666" Margin="0,0,0,4"/>
-                            <DataGrid x:Name="TagRecsGrid" MaxHeight="300"/>
-
                             <!-- Deploy Custom Tag -->
                             <Button x:Name="CustomTagButton" Content="+ Deploy Custom Tag" FontSize="12" Padding="12,6,12,6" Margin="0,10,0,10"
                                     HorizontalAlignment="Left" Cursor="Hand"
@@ -340,6 +329,17 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Border>
+
+                            <!-- Untagged Resources -->
+                            <TextBlock Text="Untagged Resources" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="UntaggedNote" Text="" FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <DataGrid x:Name="UntaggedResourcesGrid" MaxHeight="350"/>
+
+                            <!-- Tag Recommendations -->
+                            <TextBlock Text="Tag Recommendations (Cloud Adoption Framework)" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock x:Name="TagComplianceText" Text="" FontSize="13" Margin="0,0,0,8"/>
+                            <TextBlock Text="Click Add to deploy a missing tag or Remove to delete a present tag from a scope." FontSize="12" Foreground="#666" Margin="0,0,0,4"/>
+                            <DataGrid x:Name="TagRecsGrid" MaxHeight="300"/>
 
                         </StackPanel>
                     </ScrollViewer>
