@@ -408,6 +408,9 @@ $script:scanData = @{
     IdleVMs       = $null
 }
 
+# -- Session Action Log (tags deployed/removed, policies assigned/unassigned) --
+$script:actionLog = [System.Collections.Generic.List[PSCustomObject]]::new()
+
 ###########################################################################
 # HELPER FUNCTIONS
 ###########################################################################
@@ -2051,6 +2054,7 @@ function Populate-PolicyTab {
             if ($successCount -eq $matchCount) {
                 $script:PolicyDeployStatus.Text = "Unassigned: $displayName ($successCount assignment(s) removed)"
                 $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+                $script:actionLog.Add([PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Type = 'Policy Unassigned'; Detail = "$displayName ($successCount removed)" })
                 # Disable all matching buttons in the grid
                 $sender.Content = 'Removed'
                 $sender.IsEnabled = $false
@@ -3876,6 +3880,7 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
 <a href="#policy">7. Policy Compliance</a>
 <a href="#optimization">8. Optimization Opportunities</a>
 <a href="#budgets">9. Budget Status</a>
+<a href="#actions">10. Actions Taken</a>
 </div>
 "@)
 
@@ -4157,6 +4162,17 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
         [void]$sb.Append("</table>")
     } else {
         [void]$sb.Append('<p class="text-muted">No budgets configured. Consider creating budgets for all production subscriptions.</p>')
+    }
+
+    # == 10. ACTIONS TAKEN ==
+    if ($script:actionLog.Count -gt 0) {
+        [void]$sb.Append('<div class="section" id="actions"><h2>10. Actions Taken This Session</h2>')
+        [void]$sb.Append('<p>The following changes were made during this scan session:</p>')
+        [void]$sb.Append('<table><tr><th>Time</th><th>Action</th><th>Detail</th></tr>')
+        foreach ($entry in $script:actionLog) {
+            [void]$sb.Append("<tr><td>$($esc::Escape($entry.Time))</td><td>$($esc::Escape($entry.Type))</td><td>$($esc::Escape($entry.Detail))</td></tr>")
+        }
+        [void]$sb.Append('</table></div>')
     }
 
     # Footer
@@ -4689,9 +4705,11 @@ $script:TagDeployButton.Add_Click({
             if ($result -and $result.FailCount -eq 0) {
                 $script:TagDeployStatus.Text = "Removed '$tagName' from $($result.SuccessCount) scope(s)"
                 $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+                $script:actionLog.Add([PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Type = 'Tag Removed'; Detail = "$tagName ($($result.SuccessCount) scopes)" })
             } elseif ($result -and $result.SuccessCount -gt 0) {
                 $script:TagDeployStatus.Text = "Partial: $($result.SuccessCount) OK, $($result.FailCount) failed - $($result.FailMsg)"
                 $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+                $script:actionLog.Add([PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Type = 'Tag Removed (Partial)'; Detail = "$tagName ($($result.SuccessCount) OK, $($result.FailCount) failed)" })
             } else {
                 $errMsg = if ($result) { $result.FailMsg } else { 'Unknown error' }
                 $script:TagDeployStatus.Text = "Failed: $errMsg"
@@ -4777,6 +4795,7 @@ $script:TagDeployButton.Add_Click({
             if ($result -and $result.Success) {
                 $script:TagDeployStatus.Text = "Deployed: $tagName=$tagValue"
                 $script:TagDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+                $script:actionLog.Add([PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Type = 'Tag Deployed'; Detail = "$tagName=$tagValue" })
             } else {
                 $errMsg = if ($result) { $result.Message } else { 'Unknown error' }
                 $script:TagDeployStatus.Text = "Failed: $errMsg"
@@ -4850,6 +4869,7 @@ $script:PolicyDeployButton.Add_Click({
         if ($successCount -eq $targets.Count) {
             $script:PolicyDeployStatus.Text = "Unassigned: $displayName ($successCount assignment(s) removed)"
             $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+            $script:actionLog.Add([PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Type = 'Policy Unassigned'; Detail = "$displayName ($successCount removed)" })
         } elseif ($successCount -gt 0) {
             $script:PolicyDeployStatus.Text = "Partial: $successCount of $($targets.Count) removed. Last error: $failMsg"
             $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
@@ -4909,6 +4929,7 @@ $script:PolicyDeployButton.Add_Click({
             if ($result.Success) {
                 $script:PolicyDeployStatus.Text = "Deployed: $displayName ($effect)"
                 $script:PolicyDeployStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#107C10')
+                $script:actionLog.Add([PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Type = 'Policy Deployed'; Detail = "$displayName ($effect)" })
                 if ($effect -in @('DeployIfNotExists', 'Modify')) {
                     $script:lastPolicyAssignmentScope = $scope
                     $script:lastPolicyAssignmentId = "$scope/providers/Microsoft.Authorization/policyAssignments/$($result.AssignmentName)"
