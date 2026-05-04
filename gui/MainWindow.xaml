@@ -260,6 +260,14 @@
                             <TextBlock x:Name="AnomalyNote" Text="Subscriptions with 25%+ month-over-month cost changes." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
                             <DataGrid x:Name="AnomalyGrid" MaxHeight="200"/>
 
+                            <!-- Cost Management Alerts (API) -->
+                            <TextBlock Text="Cost Management Alerts" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
+                            <TextBlock x:Name="AlertsSummaryNote" Text="Triggered anomaly, budget, and forecast alerts from Cost Management." FontSize="11" Foreground="#999" Margin="0,0,0,6"/>
+                            <TextBlock Text="Triggered Alerts" FontSize="13" FontWeight="SemiBold" Foreground="#333" Margin="0,0,0,4"/>
+                            <DataGrid x:Name="TriggeredAlertsGrid" MaxHeight="250"/>
+                            <TextBlock Text="Configured Anomaly Alert Rules" FontSize="13" FontWeight="SemiBold" Foreground="#333" Margin="0,12,0,4"/>
+                            <DataGrid x:Name="ConfiguredRulesGrid" MaxHeight="200"/>
+
                             <!-- Cost by Tag -->
                             <TextBlock x:Name="CostByTagHeader" Text="Cost by Tag" Style="{StaticResource SectionHeader}"/>
                             <TextBlock x:Name="CostByTagDesc" Text="Select a tag below to see cost distribution." FontSize="12" Foreground="#666" Margin="0,0,0,10"/>
@@ -593,6 +601,23 @@
                                               ToolTip="Optional: select an Action Group to trigger when thresholds are crossed">
                                         <ComboBoxItem Content="(None)" IsSelected="True"/>
                                     </ComboBox>
+                                </StackPanel>
+
+                                <!-- Tag Filter (optional - scopes budget to a tag) -->
+                                <TextBlock Text="Tag Filter (optional):" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <TextBlock Text="Scope this budget to resources matching a specific tag. Leave blank for a subscription-wide budget."
+                                           FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Tag Name:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <ComboBox x:Name="BudgetDeployTagNameSelector" Width="250" FontSize="12"
+                                              ToolTip="Select a tag name from your environment to scope this budget">
+                                        <ComboBoxItem Content="(No tag filter)" IsSelected="True"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Tag Value:" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Width="120"/>
+                                    <TextBox x:Name="BudgetDeployTagValueInput" Width="250" FontSize="12" Text=""
+                                             ToolTip="Enter the tag value to filter by (e.g. Engineering, Production)"/>
                                 </StackPanel>
 
                                 <!-- Threshold Inputs (up to 4) -->

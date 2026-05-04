@@ -295,6 +295,7 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Get-CommitmentUtilization.ps1')
 . (Join-Path $modulePath 'Get-OrphanedResources.ps1')
 . (Join-Path $modulePath 'Get-BudgetStatus.ps1')
+. (Join-Path $modulePath 'Get-AnomalyAlerts.ps1')
 . (Join-Path $modulePath 'Get-SavingsRealized.ps1')
 . (Join-Path $modulePath 'Get-PolicyInventory.ps1')
 . (Join-Path $modulePath 'Get-PolicyRecommendations.ps1')
@@ -347,6 +348,8 @@ $controls = @(
     'BudgetSummaryText', 'BudgetGrid', 'ScorecardGrid',
     # Cost Analysis - Anomalies
     'AnomalyNote', 'AnomalyGrid',
+    # Cost Analysis - API Alerts
+    'AlertsSummaryNote', 'TriggeredAlertsGrid', 'ConfiguredRulesGrid',
     # Optimization
     'AHBCountText', 'AHBDetailText', 'OrphanCountText', 'OrphanDetailText',
     'RIUtilText', 'RIUtilDetail', 'RIContractNote', 'SPContractNote',
@@ -370,6 +373,7 @@ $controls = @(
     'BudgetThreshold2', 'BudgetThreshold2Type',
     'BudgetThreshold3', 'BudgetThreshold3Type',
     'BudgetThreshold4', 'BudgetThreshold4Type',
+    'BudgetDeployTagNameSelector', 'BudgetDeployTagValueInput',
     'BudgetDeployButton', 'BudgetDeployCancelButton', 'BudgetDeployStatus',
     'BudgetPolicyPanel', 'BudgetPolicyEffectSelector', 'BudgetPolicyScopeSelector',
     'BudgetPolicyDeployButton', 'BudgetPolicyCancelButton', 'BudgetPolicyStatus',
@@ -2450,15 +2454,19 @@ function Populate-BudgetSection {
         if ($b.Budgets.Count -gt 0) {
             $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
             foreach ($budget in $b.Budgets) {
+                $sym = Get-CurrencySymbol $budget.Currency
                 [void]$rows.Add([PSCustomObject]@{
-                    Subscription = $budget.Subscription
-                    'Budget Name' = $budget.BudgetName
-                    'Budget Amount' = ([double]$budget.Amount).ToString('N2')
-                    'Actual Spend' = ([double]$budget.ActualSpend).ToString('N2')
-                    '% Used' = "$($budget.PctUsed)%"
-                    'Forecast' = ([double]$budget.Forecast).ToString('N2')
-                    'Risk' = $budget.Risk
-                    'Currency' = $budget.Currency
+                    Subscription   = $budget.Subscription
+                    'Budget Name'  = $budget.BudgetName
+                    Category       = $budget.Category
+                    'Budget Amount' = "$sym$(([double]$budget.Amount).ToString('N2'))"
+                    'Actual Spend' = "$sym$(([double]$budget.ActualSpend).ToString('N2'))"
+                    '% Used'       = "$($budget.PctUsed)%"
+                    'Forecast'     = "$sym$(([double]$budget.Forecast).ToString('N2'))"
+                    '% Forecast'   = "$($budget.PctForecast)%"
+                    Risk           = $budget.Risk
+                    Thresholds     = $budget.Thresholds
+                    Contacts       = if ($budget.ContactEmails) { $budget.ContactEmails } else { '' }
                 })
             }
             $script:BudgetGrid.ItemsSource = @($rows | Sort-Object { [double]($_.'% Used' -replace '%','') } -Descending)
@@ -2521,6 +2529,66 @@ function Populate-AnomalySection {
     } else {
         $script:AnomalyNote.Text = 'No significant cost anomalies detected (all subscriptions within 25% of prior month).'
         $script:AnomalyGrid.ItemsSource = @()
+    }
+}
+
+#-----------------------------------------------------------------------
+# COST MANAGEMENT ALERTS (API-based triggered alerts + configured rules)
+#-----------------------------------------------------------------------
+function Populate-AlertsSection {
+    $d = $script:scanData
+    if (-not $d.AnomalyAlerts -or -not $d.AnomalyAlerts.HasData) {
+        $script:AlertsSummaryNote.Text = 'No Cost Management alerts found.'
+        $script:TriggeredAlertsGrid.ItemsSource = @()
+        $script:ConfiguredRulesGrid.ItemsSource = @()
+        return
+    }
+
+    $aa = $d.AnomalyAlerts
+    $parts = @()
+    if ($aa.TotalAlerts -gt 0) { $parts += "$($aa.TotalAlerts) triggered alert(s)" }
+    if ($aa.ActiveAlertCount -gt 0) { $parts += "$($aa.ActiveAlertCount) active" }
+    if ($aa.AnomalyAlertCount -gt 0) { $parts += "$($aa.AnomalyAlertCount) anomaly" }
+    if ($aa.BudgetAlertCount -gt 0) { $parts += "$($aa.BudgetAlertCount) budget" }
+    if ($aa.ConfiguredRuleCount -gt 0) { $parts += "$($aa.ConfiguredRuleCount) configured rule(s)" }
+    $script:AlertsSummaryNote.Text = if ($parts.Count -gt 0) { $parts -join ' | ' } else { 'No alerts found.' }
+
+    # Triggered alerts grid
+    if ($aa.TriggeredAlerts.Count -gt 0) {
+        $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($a in $aa.TriggeredAlerts) {
+            $sym = Get-CurrencySymbol $a.Unit
+            [void]$rows.Add([PSCustomObject]@{
+                Subscription = $a.Subscription
+                Type         = $a.AlertType
+                Category     = $a.Category
+                Status       = $a.Status
+                Amount       = "$sym$(([double]$a.Amount).ToString('N2'))"
+                'Current Spend' = "$sym$(([double]$a.CurrentSpend).ToString('N2'))"
+                Contacts     = $a.Contacts
+                Created      = $a.CreatedAt
+            })
+        }
+        $script:TriggeredAlertsGrid.ItemsSource = @($rows | Sort-Object Created -Descending)
+    } else {
+        $script:TriggeredAlertsGrid.ItemsSource = @()
+    }
+
+    # Configured anomaly rules grid
+    if ($aa.ConfiguredRules.Count -gt 0) {
+        $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($r in $aa.ConfiguredRules) {
+            [void]$rows.Add([PSCustomObject]@{
+                Subscription = $r.Subscription
+                'Rule Name'  = $r.DisplayName
+                Status       = $r.Status
+                Recipients   = $r.ToEmails
+                'Next Run'   = $r.NextRunTime
+            })
+        }
+        $script:ConfiguredRulesGrid.ItemsSource = @($rows)
+    } else {
+        $script:ConfiguredRulesGrid.ItemsSource = @()
     }
 }
 
@@ -2885,6 +2953,21 @@ function Populate-BudgetsTab {
     }
     $script:BudgetActionGroupSelector.SelectedIndex = 0
 
+    # Populate tag name dropdown for tag-scoped budgets
+    $script:BudgetDeployTagNameSelector.Items.Clear()
+    $noneTagItem = [System.Windows.Controls.ComboBoxItem]::new()
+    $noneTagItem.Content = '(No tag filter)'
+    $script:BudgetDeployTagNameSelector.Items.Add($noneTagItem) | Out-Null
+    if ($d.Tags -and $d.Tags.TagNames) {
+        foreach ($tagEntry in $d.Tags.TagNames.GetEnumerator()) {
+            $tagItem = [System.Windows.Controls.ComboBoxItem]::new()
+            $tagItem.Content = "$($tagEntry.Key) ($($tagEntry.Value.ResourceCount) resources)"
+            $tagItem.Tag = $tagEntry.Key
+            $script:BudgetDeployTagNameSelector.Items.Add($tagItem) | Out-Null
+        }
+    }
+    $script:BudgetDeployTagNameSelector.SelectedIndex = 0
+
     # Populate budget policy scope selector
     $script:BudgetPolicyScopeSelector.Items.Clear()
     foreach ($sub in $d.Auth.Subscriptions) {
@@ -2919,13 +3002,17 @@ function Update-BudgetDetailView {
             [void]$rows.Add([PSCustomObject]@{
                 Subscription   = $b.Subscription
                 'Budget Name'  = $b.BudgetName
+                Category       = $b.Category
                 'Amount'       = "$sym$(([double]$b.Amount).ToString('N2'))"
                 'Actual Spend' = "$sym$(([double]$b.ActualSpend).ToString('N2'))"
                 '% Used'       = "$($b.PctUsed)%"
                 'Forecast'     = "$sym$(([double]$b.Forecast).ToString('N2'))"
+                '% Forecast'   = "$($b.PctForecast)%"
                 'Risk'         = $b.Risk
+                'Tag Filter'   = if ($b.TagFilter) { $b.TagFilter } else { '' }
                 'Time Grain'   = $b.TimeGrain
                 'Thresholds'   = $b.Thresholds
+                'Contacts'     = if ($b.ContactEmails) { $b.ContactEmails } else { '' }
             })
         }
         $script:BudgetDetailGrid.ItemsSource = @($rows | Sort-Object { [double]($_.'% Used' -replace '[^0-9.]','') } -Descending)
@@ -3014,9 +3101,23 @@ function Deploy-BudgetFromTab {
         $notifications["NotificationForExceededBudget$($i + 1)"] = $notif
     }
 
+    # Get tag filter values
+    $tagFilterName  = ''
+    $tagFilterValue = ''
+    if ($script:BudgetDeployTagNameSelector.SelectedItem -and $script:BudgetDeployTagNameSelector.SelectedItem.Tag) {
+        $tagFilterName = $script:BudgetDeployTagNameSelector.SelectedItem.Tag
+        $tagFilterValue = $script:BudgetDeployTagValueInput.Text.Trim()
+        if ($tagFilterName -and -not $tagFilterValue) {
+            $script:BudgetDeployStatus.Foreground = '#D83B01'
+            $script:BudgetDeployStatus.Text = 'Tag value is required when a tag name is selected.'
+            return
+        }
+    }
+
     $script:BudgetDeployButton.IsEnabled = $false
+    $tagNote = if ($tagFilterName -and $tagFilterValue) { " (filtered by $tagFilterName=$tagFilterValue)" } else { '' }
     $script:BudgetDeployStatus.Foreground = '#0078D4'
-    $script:BudgetDeployStatus.Text = "Deploying budget '$budgetName'..."
+    $script:BudgetDeployStatus.Text = "Deploying budget '$budgetName'$tagNote..."
 
     # Force UI update
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
@@ -3039,15 +3140,28 @@ function Deploy-BudgetFromTab {
 
     foreach ($sub in $targetSubs) {
         try {
-            $budgetBody = @{
-                properties = @{
-                    category      = 'Cost'
-                    amount        = $amount
-                    timeGrain     = $timeGrain
-                    timePeriod    = @{ startDate = $startDate; endDate = $endDate }
-                    notifications = $notifications
+            $budgetProps = @{
+                category      = 'Cost'
+                amount        = $amount
+                timeGrain     = $timeGrain
+                timePeriod    = @{ startDate = $startDate; endDate = $endDate }
+                notifications = $notifications
+            }
+
+            # Add tag filter if specified
+            if ($tagFilterName -and $tagFilterValue) {
+                $budgetProps.filter = @{
+                    tags = @{
+                        $tagFilterName = @{
+                            name     = $tagFilterName
+                            operator = 'In'
+                            values   = @($tagFilterValue)
+                        }
+                    }
                 }
-            } | ConvertTo-Json -Depth 10
+            }
+
+            $budgetBody = @{ properties = $budgetProps } | ConvertTo-Json -Depth 10
 
             $budgetPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets/$($budgetName)?api-version=2023-05-01"
             $resp = Invoke-AzRestMethodWithRetry -Path $budgetPath -Method PUT -Payload $budgetBody
@@ -3067,7 +3181,7 @@ function Deploy-BudgetFromTab {
     $script:BudgetDeployButton.IsEnabled = $true
     if ($failCount -eq 0) {
         $script:BudgetDeployStatus.Foreground = '#107C10'
-        $script:BudgetDeployStatus.Text = "Successfully deployed budget '$budgetName' to $successCount subscription(s) with $($thresholds.Count) threshold(s)."
+        $script:BudgetDeployStatus.Text = "Successfully deployed budget '$budgetName' to $successCount subscription(s) with $($thresholds.Count) threshold(s).$tagNote"
     } else {
         $script:BudgetDeployStatus.Foreground = '#D83B01'
         $script:BudgetDeployStatus.Text = "Deployed to $successCount sub(s), $failCount failed. Check console for details."
@@ -4410,8 +4524,11 @@ $script:scanStages = @(
     @{ Label = 'Loading optimization advice...';       Pct = 80;  Action = {
         $script:scanData.Optimization = Get-OptimizationAdvice -Subscriptions $script:scanData.Auth.Subscriptions
     }}
-    @{ Label = 'Querying budget status...';            Pct = 83;  Action = {
+    @{ Label = 'Querying budget status...';            Pct = 82;  Action = {
         $script:scanData.Budgets = Get-BudgetStatus -Subscriptions $script:scanData.Auth.Subscriptions -CostData $script:scanData.Costs
+    }}
+    @{ Label = 'Querying anomaly alerts...';           Pct = 84;  Action = {
+        $script:scanData.AnomalyAlerts = Get-AnomalyAlerts -Subscriptions $script:scanData.Auth.Subscriptions
     }}
     @{ Label = 'Calculating savings realized...';      Pct = 86;  Action = {
         $script:scanData.Savings = Get-SavingsRealized -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -CommitmentData $script:scanData.Commitments
@@ -4436,6 +4553,7 @@ $script:scanStages = @(
         try { Populate-CostTab }           catch { Write-Warning "Populate-CostTab failed: $($_.Exception.Message)" }
         try { Populate-TrendChart }        catch { Write-Warning "Populate-TrendChart failed: $($_.Exception.Message)" }
         try { Populate-AnomalySection }    catch { Write-Warning "Populate-AnomalySection failed: $($_.Exception.Message)" }
+        try { Populate-AlertsSection }     catch { Write-Warning "Populate-AlertsSection failed: $($_.Exception.Message)" }
         try { Populate-TagsTab }           catch { Write-Warning "Populate-TagsTab failed: $($_.Exception.Message)" }
         try { Populate-PolicyTab }         catch { Write-Warning "Populate-PolicyTab failed: $($_.Exception.Message)" }
         try { Populate-CommitmentSection } catch { Write-Warning "Populate-CommitmentSection failed: $($_.Exception.Message)" }

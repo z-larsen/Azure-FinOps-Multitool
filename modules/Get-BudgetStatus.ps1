@@ -93,14 +93,41 @@ function Get-BudgetStatus {
                                 elseif ($pctForecast -gt 75) { 'Watch' }
                                 else { 'On Track' }
 
-                        # Notification thresholds
-                        $thresholds = @()
+                        # Notification thresholds and contacts
+                        $thresholds    = @()
+                        $contactEmails = @()
+                        $contactRoles  = @()
                         if ($bp.notifications) {
                             foreach ($notif in $bp.notifications.PSObject.Properties) {
                                 $np = $notif.Value
                                 $thresholds += "$($np.threshold)% ($($np.operator))"
+                                if ($np.contactEmails) { $contactEmails += @($np.contactEmails) }
+                                if ($np.contactRoles)  { $contactRoles  += @($np.contactRoles) }
                             }
                         }
+
+                        # Extract tag filters from budget filter property
+                        $tagFilters = @()
+                        if ($bp.filter -and $bp.filter.tags) {
+                            foreach ($tagProp in $bp.filter.tags.PSObject.Properties) {
+                                $tagKey = $tagProp.Name
+                                $tagVals = @()
+                                if ($tagProp.Value -and $tagProp.Value.values) {
+                                    $tagVals = @($tagProp.Value.values)
+                                }
+                                $tagFilters += "$tagKey=$($tagVals -join '|')"
+                            }
+                        }
+                        if ($bp.filter -and $bp.filter.dimensions) {
+                            foreach ($dimProp in $bp.filter.dimensions.PSObject.Properties) {
+                                if ($dimProp.Name -match '^Tag') {
+                                    $dimName = $dimProp.Name -replace '^Tag', ''
+                                    $dimVals = if ($dimProp.Value.values) { @($dimProp.Value.values) } else { @() }
+                                    $tagFilters += "$dimName=$($dimVals -join '|')"
+                                }
+                            }
+                        }
+                        $tagFilterStr = $tagFilters -join '; '
 
                         [void]$budgets.Add([PSCustomObject]@{
                             Subscription     = $sub.Name
@@ -115,6 +142,9 @@ function Get-BudgetStatus {
                             PctForecast      = $pctForecast
                             Risk             = $risk
                             Thresholds       = ($thresholds -join ', ')
+                            ContactEmails    = (($contactEmails | Select-Object -Unique) -join ', ')
+                            ContactRoles     = (($contactRoles  | Select-Object -Unique) -join ', ')
+                            TagFilter        = $tagFilterStr
                             Currency         = if ($CostData -and $CostData.ContainsKey($sub.Id)) { $CostData[$sub.Id].Currency } else { 'USD' }
                         })
                     }

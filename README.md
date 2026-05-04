@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.0.1](https://img.shields.io/badge/Version-2.0.1-brightgreen)
+![Version 2.1.0](https://img.shields.io/badge/Version-2.1.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,15 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.1.0
+
+**New features:**
+- **Cost Management Alerts** — new `Get-AnomalyAlerts` module queries `Microsoft.CostManagement/alerts` for triggered anomaly, budget, and forecast alerts plus `scheduledActions` for configured anomaly alert rules; results displayed in a new "Cost Management Alerts" section on the Cost Analysis tab with triggered alerts grid and configured rules grid
+- **Tag-scoped budget deploy** — budget deploy form now includes a Tag Name dropdown (populated from scan tag inventory) and Tag Value field; deploying creates a budget with a `filter.tags` scope so spend is tracked only for matching resources
+- **Budget tag filter visibility** — existing budgets with tag filters are now shown in the Budget Detail grid with a "Tag Filter" column (e.g. `CostCenter=Engineering`)
+- **Budget contact extraction** — budget notification contacts (`ContactEmails`, `ContactRoles`) are now extracted and displayed in both the overview and detail budget grids
+- **Expanded budget columns** — budget grids now show Category, % Forecast, Thresholds, and Contacts alongside existing fields
 
 ### v2.0.1
 
