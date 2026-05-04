@@ -85,19 +85,6 @@ function Get-PolicyRecommendations {
             )
         }
 
-        # === SECURITY (CAF: Azure Security Benchmark v3) ===
-        [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policySetDefinitions/1f3afdf9-d0c9-4c3d-847f-89da613e70a8'
-            DisplayName  = 'Azure Security Benchmark (v3)'
-            Category     = 'Security'
-            Pillar       = 'Secure'
-            Priority     = 'Required'
-            DefaultEffect = 'Audit'
-            AllowedEffects = @('Audit','Disabled')
-            Purpose      = 'Comprehensive security baseline initiative - CAF recommends enabling at root management group'
-            Reference    = 'https://learn.microsoft.com/en-us/security/benchmark/azure/overview'
-        }
-
         # === ALLOWED RESOURCE LOCATIONS (CAF) ===
         [PSCustomObject]@{
             PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c'
@@ -130,17 +117,36 @@ function Get-PolicyRecommendations {
             )
         }
 
-        # === REQUIRE SECURE TRANSFER FOR STORAGE (CAF) ===
+        # === ALLOWED STORAGE ACCOUNT SKUS (CAF) ===
         [PSCustomObject]@{
-            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/404c3081-a854-4457-ae30-26a93ef643f9'
-            DisplayName  = 'Secure transfer to storage accounts should be enabled'
+            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/7433c107-6db4-4ad1-b57a-a76dce0154a1'
+            DisplayName  = 'Allowed storage account SKUs'
             Category     = 'Storage'
-            Pillar       = 'Secure'
-            Priority     = 'Required'
-            DefaultEffect = 'Audit'
+            Pillar       = 'Optimize'
+            Priority     = 'Recommended'
+            DefaultEffect = 'Deny'
             AllowedEffects = @('Audit','Deny','Disabled')
-            Purpose      = 'Ensure data encryption in transit for all storage account communications'
+            Purpose      = 'Restrict storage account types to control costs and enforce standard tiers'
             Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#storage'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed storage SKUs (comma-separated, e.g. Standard_LRS,Standard_GRS,Standard_ZRS)'; Required = $true; IsArray = $true }
+            )
+        }
+
+        # === ALLOWED DISK SKUS (CAF) ===
+        [PSCustomObject]@{
+            PolicyDefId  = '/providers/Microsoft.Authorization/policyDefinitions/06a78e20-9358-41c9-923c-fb736d382a4d'
+            DisplayName  = 'Allowed managed disk SKUs'
+            Category     = 'Compute'
+            Pillar       = 'Optimize'
+            Priority     = 'Recommended'
+            DefaultEffect = 'Deny'
+            AllowedEffects = @('Audit','Deny','Disabled')
+            Purpose      = 'Restrict managed disk types to prevent costly Premium or Ultra disks where not needed'
+            Reference    = 'https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies#compute'
+            Parameters   = @(
+                @{ Name = 'listOfAllowedSKUs'; Label = 'Allowed disk SKUs (comma-separated, e.g. Standard_LRS,StandardSSD_LRS,Premium_LRS)'; Required = $true; IsArray = $true }
+            )
         }
 
         # === DEPLOY DIAGNOSTIC SETTINGS (CAF) ===
