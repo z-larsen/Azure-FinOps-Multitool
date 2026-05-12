@@ -294,7 +294,7 @@ function Get-ResourceCosts {
                 $monthEnd = (Get-Date -Year $now.Year -Month $now.Month -Day 1).AddMonths(1).AddDays(-1)
 
                 $fBody = @{
-                    type       = 'ActualCost'
+                    type       = 'Usage'
                     timeframe  = 'Custom'
                     timePeriod = @{
                         from = $now.ToString('yyyy-MM-dd')
@@ -315,11 +315,11 @@ function Get-ResourceCosts {
                 if ($fResp.StatusCode -eq 200) {
                     $fResult = ($fResp.Content | ConvertFrom-Json)
                     if ($fResult.properties.rows -and $fResult.properties.rows.Count -gt 0) {
-                        $forecastRemaining = 0
+                        $forecastTotal = 0
                         foreach ($row in $fResult.properties.rows) {
-                            $forecastRemaining += $row[0]
+                            $forecastTotal += [double]$row[0]
                         }
-                        $subForecast = $subTotalActual + [math]::Round($forecastRemaining, 2)
+                        $subForecast = [math]::Round($forecastTotal, 2)
                     }
                 }
             } catch {
