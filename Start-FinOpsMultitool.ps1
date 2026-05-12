@@ -3396,23 +3396,23 @@ function Show-SubscriptionSelector {
 
         <Border Grid.Row="2" BorderBrush="#DDD" BorderThickness="1" CornerRadius="4" Background="White">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
-                <StackPanel x:Name="SubListPanel"/>
+                <StackPanel Name="SubListPanel"/>
             </ScrollViewer>
         </Border>
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,8">
-            <Button x:Name="SelectAllBtn" Content="Select All" Width="90" Height="28" Margin="0,0,8,0"
+            <Button Name="SelectAllBtn" Content="Select All" Width="90" Height="28" Margin="0,0,8,0"
                     Background="White" BorderBrush="#CCC" Foreground="#333" FontSize="11.5" Cursor="Hand"/>
-            <Button x:Name="SelectNoneBtn" Content="Select None" Width="90" Height="28"
+            <Button Name="SelectNoneBtn" Content="Select None" Width="90" Height="28"
                     Background="White" BorderBrush="#CCC" Foreground="#333" FontSize="11.5" Cursor="Hand"/>
-            <TextBlock x:Name="CountLabel" Text="" FontSize="11.5" Foreground="#666"
+            <TextBlock Name="CountLabel" Text="" FontSize="11.5" Foreground="#666"
                        VerticalAlignment="Center" Margin="16,0,0,0"/>
         </StackPanel>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button x:Name="CancelBtn" Content="Cancel" Width="90" Height="32" Margin="0,0,10,0"
+            <Button Name="CancelBtn" Content="Cancel" Width="90" Height="32" Margin="0,0,10,0"
                     Background="White" BorderBrush="#CCC" Foreground="#333" FontSize="12.5" Cursor="Hand"/>
-            <Button x:Name="OkBtn" Content="Scan Selected" Width="120" Height="32"
+            <Button Name="OkBtn" Content="Scan Selected" Width="120" Height="32"
                     Background="#0078D4" Foreground="White" BorderBrush="#0078D4" FontSize="12.5"
                     FontWeight="SemiBold" Cursor="Hand"/>
         </StackPanel>
@@ -4647,13 +4647,14 @@ $script:TenantButton.Add_Click({
     $script:TenantButton.Content = "$($script:LockOpen) Commercial Tenant"
     $script:StatusText.Text = 'Connecting to Azure Commercial...'
     try {
-        $script:scanData.Auth = Initialize-Scanner -Environment 'AzureCloud' -ParentWindow $window
+        $authResult = @(Initialize-Scanner -Environment 'AzureCloud' -ParentWindow $window)
+        $script:scanData.Auth = $authResult[-1]
         $envLabel = $script:scanData.Auth.Environment
         $subCount = $script:scanData.Auth.Subscriptions.Count
 
         # Let user select which subscriptions to scan
         $selected = Show-SubscriptionSelector -Subscriptions $script:scanData.Auth.Subscriptions -SkippedSubs $script:scanData.Auth.SkippedSubs -ParentWindow $window
-        $script:scanData.Auth.Subscriptions = @($selected)
+        $script:scanData.Auth | Add-Member -NotePropertyName Subscriptions -NotePropertyValue @($selected) -Force
         $subCount = $script:scanData.Auth.Subscriptions.Count
 
         $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
@@ -4677,13 +4678,14 @@ $script:GovTenantButton.Add_Click({
     $script:GovTenantButton.Content = "$($script:LockOpen) Gov Tenant"
     $script:StatusText.Text = 'Connecting to Azure Government...'
     try {
-        $script:scanData.Auth = Initialize-Scanner -Environment 'AzureUSGovernment' -ParentWindow $window
+        $authResult = @(Initialize-Scanner -Environment 'AzureUSGovernment' -ParentWindow $window)
+        $script:scanData.Auth = $authResult[-1]
         $envLabel = $script:scanData.Auth.Environment
         $subCount = $script:scanData.Auth.Subscriptions.Count
 
         # Let user select which subscriptions to scan
         $selected = Show-SubscriptionSelector -Subscriptions $script:scanData.Auth.Subscriptions -SkippedSubs $script:scanData.Auth.SkippedSubs -ParentWindow $window
-        $script:scanData.Auth.Subscriptions = @($selected)
+        $script:scanData.Auth | Add-Member -NotePropertyName Subscriptions -NotePropertyValue @($selected) -Force
         $subCount = $script:scanData.Auth.Subscriptions.Count
 
         $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"

@@ -88,7 +88,7 @@ function Get-CostData {
         $monthEnd = (Get-Date -Year $now.Year -Month $now.Month -Day 1).AddMonths(1).AddDays(-1)
 
         $forecastBody = @{
-            type       = 'ActualCost'
+            type       = 'Usage'
             timeframe  = 'Custom'
             timePeriod = @{
                 from = $now.ToString('yyyy-MM-dd')
@@ -103,7 +103,7 @@ function Get-CostData {
                     @{ type = 'Dimension'; name = 'SubscriptionId' }
                 )
             }
-            includeActualCost   = $true
+            includeActualCost       = $true
             includeFreshPartialCost = $false
         } | ConvertTo-Json -Depth 10
 
@@ -117,15 +117,21 @@ function Get-CostData {
         $fResult = ($fResponse.Content | ConvertFrom-Json)
 
         if ($fResult.properties.rows) {
+            # The Forecast API with includeActualCost returns rows that may have
+            # a CostStatus column (Actual/Forecast). Sum all rows per subscription
+            # to get the full-month projected cost.
+            $forecastSums = @{}
             foreach ($row in $fResult.properties.rows) {
                 $subId   = $row[1]
-                $amount  = [math]::Round($row[0], 2)
-
+                $amount  = [double]$row[0]
+                if (-not $forecastSums.ContainsKey($subId)) { $forecastSums[$subId] = 0 }
+                $forecastSums[$subId] += $amount
+            }
+            foreach ($subId in $forecastSums.Keys) {
                 if (-not $costMap.ContainsKey($subId)) {
                     $costMap[$subId] = @{ Actual = 0; Forecast = 0; Currency = 'USD' }
                 }
-                # Forecast returns actual + forecasted combined for the remaining days
-                $costMap[$subId].Forecast = $costMap[$subId].Actual + $amount
+                $costMap[$subId].Forecast = [math]::Round($forecastSums[$subId], 2)
             }
         }
     } catch {
@@ -142,7 +148,7 @@ function Get-CostDataPerSubscription {
 
     $costMap = @{}
     $subCount = $Subscriptions.Count
-    $skipForecast = ($subCount -gt 50)   # For large tenants, skip per-sub forecast to halve API calls
+    $skipForecast = ($subCount -gt 100)   # For very large tenants, skip per-sub forecast to halve API calls
     if ($skipForecast) {
         Write-Host "  Large tenant ($subCount subs): skipping per-sub forecast to reduce API calls" -ForegroundColor Yellow
     }
@@ -187,7 +193,7 @@ function Get-CostDataPerSubscription {
                     $now = Get-Date
                     $monthEnd = (Get-Date -Year $now.Year -Month $now.Month -Day 1).AddMonths(1).AddDays(-1)
                     $fBody = @{
-                        type       = 'ActualCost'
+                        type       = 'Usage'
                         timeframe  = 'Custom'
                         timePeriod = @{
                             from = $now.ToString('yyyy-MM-dd')

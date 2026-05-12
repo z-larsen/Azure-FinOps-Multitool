@@ -113,6 +113,7 @@ function Get-CommitmentUtilization {
 
     # For EA / fallback: query at subscription scope
     if ($reservations.Count -eq 0) {
+        try {
             $summaryPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/reservationSummaries?grain=monthly&api-version=2023-05-01&`$filter=properties/usageDate ge '$(((Get-Date).AddDays(-30)).ToString('yyyy-MM-dd'))'"
             $resp = Invoke-AzRestMethodWithRetry -Path $summaryPath -Method GET
             if ($resp.StatusCode -eq 200) {
@@ -136,9 +137,9 @@ function Get-CommitmentUtilization {
                     break  # Got data from one sub, don't repeat
                 }
             }
+        } catch {
+            Write-Warning "  Reservation summaries query failed: $($_.Exception.Message)"
         }
-    } catch {
-        Write-Warning "  Reservation summaries query failed: $($_.Exception.Message)"
     }
 
     # -- Step 2: Try the Reservation Orders API at billing scope --
@@ -239,9 +240,10 @@ function Get-CommitmentUtilization {
                     if ($savingsPlans.Count -gt 0) { break }
                 }
             }
+            }
+        } catch {
+            Write-Warning "  Savings plan utilization query failed: $($_.Exception.Message)"
         }
-    } catch {
-        Write-Warning "  Savings plan utilization query failed: $($_.Exception.Message)"
     }
 
     # -- Step 4: Calculate summary stats --

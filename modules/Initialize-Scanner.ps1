@@ -116,10 +116,11 @@ function Initialize-Scanner {
     # so Connect-AzAccount goes straight through without console prompts
     $env:AZURE_LOGIN_EXPERIENCE_V2 = 'Off'
 
-    # Authenticate if no session or if the current session is in a different cloud
-    if (-not $ctx -or $ctx.Environment.Name -ne $Environment) {
+    # Reuse existing session if one exists in the target cloud; otherwise prompt login
+    if ($ctx -and $ctx.Account -and $ctx.Environment.Name -eq $Environment) {
+        Write-Host "  Using existing Azure session: $($ctx.Account.Id) ($Environment)" -ForegroundColor Cyan
+    } else {
         Write-Host "  Authenticating to Azure ($Environment)..." -ForegroundColor Cyan
-        # Minimize the scanner window so the browser login can open normally
         if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
         try {
             Connect-AzAccount -Environment $Environment -ErrorAction Stop | Out-Null
@@ -179,6 +180,7 @@ function Initialize-Scanner {
     $selectedTenantId = $selection.TenantId
     $selectedEnv = if ($selection.Environment) { $selection.Environment } else { $Environment }
 
+    # Switch to the selected tenant - use Set-AzContext if same cloud, full Connect if different
     if ($selectedTenantId -ne $ctx.Tenant.Id -or $selectedEnv -ne $ctx.Environment.Name) {
         Write-Host "  Switching to tenant $selectedTenantId ($selectedEnv)..." -ForegroundColor Cyan
         if ($ParentWindow) { $ParentWindow.WindowState = 'Minimized' }
@@ -187,7 +189,16 @@ function Initialize-Scanner {
         } finally {
             if ($ParentWindow) { $ParentWindow.WindowState = 'Normal'; $ParentWindow.Activate() }
         }
-        $ctx = Get-AzContext
+    } else {
+        # Same tenant selected - explicitly set context to be safe
+        Write-Host "  Confirming context for tenant $selectedTenantId..." -ForegroundColor Cyan
+        Set-AzContext -TenantId $selectedTenantId -ErrorAction SilentlyContinue | Out-Null
+    }
+    $ctx = Get-AzContext
+
+    # Verify the context actually landed on the right tenant
+    if ($ctx.Tenant.Id -ne $selectedTenantId) {
+        throw "Context mismatch: expected tenant $selectedTenantId but got $($ctx.Tenant.Id). Try closing all PowerShell sessions and re-running."
     }
 
     $tenantId = $ctx.Tenant.Id

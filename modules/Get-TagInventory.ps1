@@ -65,7 +65,7 @@ resources
         Write-Warning "Untagged resource count failed: $($_.Exception.Message)"
     }
 
-    # -- Query 4: Untagged resource details (top 500) -------------------
+    # -- Query 4: Untagged resource details (paginate all) ----------------
     $untaggedResources = @()
     try {
         $untaggedDetailQuery = @"
@@ -73,14 +73,24 @@ resources
 | where isnull(tags) or tags == '{}'
 | project name, type, resourceGroup, subscriptionId, location
 | order by type asc, name asc
-| take 500
 "@
-        $udResult = Search-AzGraphSafe -Query $untaggedDetailQuery -Subscription $subIds -First 500
-        if ($udResult.Data) {
+        $allUntagged = @()
+        $udSkipToken = $null
+        do {
+            $udResult = Search-AzGraphSafe -Query $untaggedDetailQuery -Subscription $subIds -First 1000 -SkipToken $udSkipToken
+            if (-not $udResult -or -not $udResult.Data) { break }
+            $allUntagged += $udResult.Data
+            $udSkipToken = $udResult.SkipToken
+            if ($allUntagged.Count % 2000 -eq 0) {
+                Write-Host "    Loaded $($allUntagged.Count) untagged resources so far..." -ForegroundColor Gray
+            }
+        } while ($udSkipToken)
+
+        if ($allUntagged.Count -gt 0) {
             # Map subscription IDs to names
             $subNameMap = @{}
             foreach ($s in $Subscriptions) { $subNameMap[$s.Id] = $s.Name }
-            $untaggedResources = @($udResult.Data | ForEach-Object {
+            $untaggedResources = @($allUntagged | ForEach-Object {
                 [PSCustomObject]@{
                     ResourceName   = $_.name
                     ResourceType   = $_.type
@@ -89,6 +99,7 @@ resources
                     Location       = $_.location
                 }
             })
+            Write-Host "    Total untagged resources loaded: $($untaggedResources.Count)" -ForegroundColor Cyan
         }
     } catch {
         Write-Warning "Untagged resource detail query failed: $($_.Exception.Message)"

@@ -61,12 +61,11 @@ function Get-CostByTag {
         }
     }
 
-    # Also include any additional existing tags not already in the list (up to 5 total to avoid 429 throttling)
-    if ($ExistingTags -and $tagsToQuery.Count -lt 5) {
+    # Also include any additional existing tags not already in the list
+    if ($ExistingTags) {
         $alreadyLower = $tagsToQuery | ForEach-Object { $_.ToLower() }
         $systemPrefixes = @('hidden-', 'ms-resource-', 'aks-managed-', 'kubernetes.io', 'displayname')
-        foreach ($key in $ExistingTags.Keys) {
-            if ($tagsToQuery.Count -ge 5) { break }
+        foreach ($key in ($ExistingTags.Keys | Sort-Object)) {
             if ($key.ToLower() -in $alreadyLower) { continue }
             $skip = $false
             foreach ($prefix in $systemPrefixes) {
@@ -120,15 +119,7 @@ function Get-CostByTag {
     # Build both timeframe bodies: MonthToDate first, then last month as fallback
     $timeframes = @('MonthToDate', 'Custom')
 
-    $perSubFailed = $false   # Track if per-sub fallback consistently returns nothing
-
     foreach ($tagName in $tagsToQuery) {
-        # If per-sub fallback already proved fruitless for a prior tag, skip remaining
-        if ($perSubFailed -and -not $useMgScope) {
-            Write-Host "  Skipping cost-by-tag for '$tagName' (per-sub returned no data for prior tags)" -ForegroundColor Yellow
-            $results[$tagName] = @()
-            continue
-        }
 
         try {
             $tagCosts = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -147,7 +138,7 @@ function Get-CostByTag {
                             totalCost = @{ name = 'Cost'; function = 'Sum' }
                         }
                         grouping = @(
-                            @{ type = 'TagKey'; name = $tagName }
+                            @{ type = 'Tag'; name = $tagName }
                         )
                     }
                 }
@@ -257,11 +248,6 @@ function Get-CostByTag {
                         Write-Host "    Per-sub fallback returned 0 rows for $tf" -ForegroundColor Yellow
                     }
                 }
-            }
-
-            # If per-sub was used and returned nothing for both timeframes, flag it
-            if (-not $useMgScope -and -not $gotData) {
-                $perSubFailed = $true
             }
 
             $results[$tagName] = $tagCosts | Sort-Object Cost -Descending

@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.1.0](https://img.shields.io/badge/Version-2.1.0-brightgreen)
+![Version 2.2.0](https://img.shields.io/badge/Version-2.2.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,16 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.2.0
+
+**Bug fixes & improvements:**
+- **Tenant context fix** — `Initialize-Scanner` now reuses the current Azure session if one exists in the target cloud, only prompts for login when no session is found; after tenant picker selection, explicitly switches context via `Connect-AzAccount -TenantId` or `Set-AzContext` and verifies the context landed correctly
+- **Subscription selector XAML fix** — replaced `x:Name` attributes with `Name` in the subscription selector dialog XAML to avoid undeclared namespace parse errors
+- **Auth object property fix** — tenant button handlers now use `Add-Member -Force` to safely overwrite the Subscriptions property on the PSCustomObject returned by `Initialize-Scanner`, and wrap the result in `@(...)[-1]` to handle extra pipeline output from Az cmdlets
+- **Forecast accuracy** — changed Forecast API request body from `type: 'ActualCost'` to `type: 'Usage'` (required by the `/forecast` endpoint); fixed response parsing to properly sum all forecast rows per subscription instead of double-counting actuals; raised per-sub forecast skip threshold from 50 to 100 subs
+- **Cost-by-tag coverage** — removed the 5-tag limit on the cost-by-tag dropdown; all non-system tags from inventory are now queryable; changed Cost Management grouping from `TagKey` to `Tag` so costs are broken down by tag value; removed early bail-out logic that skipped remaining tags if the first returned empty
+- **Untagged resource pagination** — removed the `| take 500` hard limit on untagged resource detail queries; now paginates with SkipToken in batches of 1000 to retrieve all untagged resources
 
 ### v2.1.0
 

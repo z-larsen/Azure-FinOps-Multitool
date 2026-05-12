@@ -14,8 +14,14 @@ function Get-BudgetStatus {
         [object[]]$Subscriptions,
 
         [Parameter()]
-        [hashtable]$CostData    # Existing cost data keyed by subscription ID
+        $CostData    # Existing cost data keyed by subscription ID
     )
+
+    # Guard: extract hashtable if pipeline pollution wrapped it in an array
+    if ($CostData -and $CostData -isnot [hashtable]) {
+        $CostData = @($CostData | Where-Object { $_ -is [hashtable] })[-1]
+    }
+    if (-not $CostData) { $CostData = @{} }
 
     $subCount = $Subscriptions.Count
     Write-Host "  Querying budget status ($subCount subs)..." -ForegroundColor Cyan

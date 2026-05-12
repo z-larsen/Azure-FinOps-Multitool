@@ -16,8 +16,14 @@ function Get-ResourceCosts {
         [string]$TenantId,
 
         [Parameter()]
-        [hashtable]$CostData      # Per-sub cost data for forecast ratio distribution
+        $CostData      # Per-sub cost data for forecast ratio distribution
     )
+
+    # Guard: extract hashtable if pipeline pollution wrapped it in an array
+    if ($CostData -and $CostData -isnot [hashtable]) {
+        $CostData = @($CostData | Where-Object { $_ -is [hashtable] })[-1]
+    }
+    if (-not $CostData) { $CostData = @{} }
 
     $allRows = [System.Collections.Generic.List[PSCustomObject]]::new()
 
