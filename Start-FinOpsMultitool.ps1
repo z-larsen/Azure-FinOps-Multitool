@@ -328,7 +328,7 @@ if (Test-Path $icoPath) {
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton',
+    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'CancelScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
@@ -4628,8 +4628,11 @@ $script:scanTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:scanTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 
 $script:scanTimer.Add_Tick({
+    if ($script:scanCancelled) { return }
     if ($script:currentStage -ge $script:scanStages.Count) {
         $script:scanTimer.Stop()
+        $script:CancelScanButton.Visibility = 'Collapsed'
+        $script:ScanButton.Visibility = 'Visible'
         $script:ScanButton.IsEnabled = $true
         $script:TenantButton.IsEnabled = $true
         $script:GovTenantButton.IsEnabled = $true
@@ -4655,6 +4658,8 @@ $script:scanTimer.Add_Tick({
         # If authentication failed, abort the entire scan
         if (-not $script:scanData.Auth) {
             $script:scanTimer.Stop()
+            $script:CancelScanButton.Visibility = 'Collapsed'
+            $script:ScanButton.Visibility = 'Visible'
             $script:ScanButton.IsEnabled = $true
             $script:TenantButton.IsEnabled = $true
             $script:GovTenantButton.IsEnabled = $true
@@ -4675,11 +4680,36 @@ $script:scanTimer.Add_Tick({
 # Scan Button
 $script:ScanButton.Add_Click({
     $script:ScanButton.IsEnabled = $false
+    $script:ScanButton.Visibility = 'Collapsed'
+    $script:CancelScanButton.Visibility = 'Visible'
     $script:TenantButton.IsEnabled = $false
     $script:GovTenantButton.IsEnabled = $false
     $script:ExportButton.IsEnabled = $false
     $script:currentStage = 0
+    $script:scanCancelled = $false
     $script:scanTimer.Start()
+})
+
+# Cancel Scan Button
+$script:CancelScanButton.Add_Click({
+    $result = [System.Windows.MessageBox]::Show(
+        "Are you sure you want to cancel the scan?`n`nAny data already collected will be lost.",
+        'Cancel Scan',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question
+    )
+    if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
+        $script:scanCancelled = $true
+        $script:scanTimer.Stop()
+        $script:CancelScanButton.Visibility = 'Collapsed'
+        $script:ScanButton.Visibility = 'Visible'
+        $script:ScanButton.IsEnabled = $true
+        $script:ScanButton.Content = "Re-Scan"
+        $script:TenantButton.IsEnabled = $true
+        $script:GovTenantButton.IsEnabled = $true
+        $script:StatusText.Text = 'Scan cancelled.'
+        $script:ProgressBar.Value = 0
+    }
 })
 
 # Lock icon characters (surrogates for PS 5.1 compat)

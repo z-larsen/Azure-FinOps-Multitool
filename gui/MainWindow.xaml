@@ -130,6 +130,8 @@
                             Background="Transparent" Foreground="White" BorderBrush="#8DC6FF" Margin="0,0,8,0"/>
                     <Button x:Name="ScanButton" Content="&#x26A1; Scan" Style="{StaticResource AzureButton}"
                             Background="White" Foreground="#0078D4" Margin="0,0,8,0"/>
+                    <Button x:Name="CancelScanButton" Content="&#x274C; Cancel" Style="{StaticResource AzureButton}"
+                            Background="#E81123" Foreground="White" Margin="0,0,8,0" Visibility="Collapsed"/>
                     <Button x:Name="ExportButton" Content="&#x1F4CA; Export Scan Results" Style="{StaticResource AzureButton}"
                             Background="Transparent" Foreground="White" BorderBrush="White" IsEnabled="False"/>
                 </StackPanel>
