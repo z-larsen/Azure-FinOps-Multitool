@@ -248,8 +248,20 @@ function Get-BudgetHistory {
             foreach ($row in $result.properties.rows) {
                 $cost = [math]::Round([double]$row[$costIdx], 2)
                 $dateVal = $row[$dateIdx].ToString()
-                # API returns YYYYMMDD format — extract YYYY-MM
-                $monthKey = if ($dateVal.Length -ge 6) { "$($dateVal.Substring(0,4))-$($dateVal.Substring(4,2))" } else { $dateVal }
+                # Parse date — API may return YYYYMMDD integer, YYYY-MM-DDTHH:mm:ss, or other formats
+                $dateClean = $dateVal -replace '[^0-9\-]', ''
+                if ($dateClean.Length -ge 8 -and $dateClean -notmatch '-') {
+                    # Pure digits like 20251100 or 20251101
+                    $monthKey = "$($dateClean.Substring(0,4))-$($dateClean.Substring(4,2))"
+                } elseif ($dateVal -match '(\d{4})-(\d{2})') {
+                    # ISO format like 2025-11-01T00:00:00
+                    $monthKey = "$($Matches[1])-$($Matches[2])"
+                } else {
+                    try {
+                        $parsed = [datetime]::Parse($dateVal)
+                        $monthKey = $parsed.ToString('yyyy-MM')
+                    } catch { continue }
+                }
                 $monthlyCosts[$monthKey] = $cost
             }
 
