@@ -141,7 +141,7 @@ function Get-CostByTag {
                             totalCost = @{ name = 'Cost'; function = 'Sum' }
                         }
                         grouping = @(
-                            @{ type = 'Tag'; name = $tagName }
+                            @{ type = 'TagKey'; name = $tagName }
                         )
                     }
                 }
