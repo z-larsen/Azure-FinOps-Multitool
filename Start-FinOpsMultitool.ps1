@@ -275,6 +275,9 @@ function Search-AzGraphSafe {
     return $null  # All retries exhausted
 }
 
+# -- Version -----------------------------------------------------------
+$script:AppVersion = '2.2.1'
+
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
 $modulePath = Join-Path $PSScriptRoot 'modules'
@@ -394,6 +397,9 @@ foreach ($name in $controls) {
     $ctrl = $window.FindName($name)
     if ($ctrl) { Set-Variable -Name $name -Value $ctrl -Scope Script }
 }
+
+# Set version label dynamically so it stays in sync
+if ($script:VersionLabel) { $script:VersionLabel.Text = "v$($script:AppVersion)" }
 
 # -- Global Scan Data --------------------------------------------------
 $script:scanData = @{
@@ -3461,10 +3467,12 @@ function Show-SubscriptionSelector {
     $selectAllBtn.Add_Click({ foreach ($c in $checkboxes) { $c.IsChecked = $true } }.GetNewClosure())
     $selectNoneBtn.Add_Click({ foreach ($c in $checkboxes) { $c.IsChecked = $false } }.GetNewClosure())
 
-    # OK / Cancel
-    $script:_subSelectorResult = $null
+    # OK / Cancel — store result on the dialog's Tag to avoid $script: scope
+    # issues with .GetNewClosure() (closures create a new dynamic module,
+    # so $script: inside them points to the module scope, not the caller)
+    $dlgWin.Tag = $null
     $okBtn.Add_Click({
-        $script:_subSelectorResult = @($checkboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
+        $dlgWin.Tag = @($checkboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
         $dlgWin.Close()
     }.GetNewClosure())
     $cancelBtn.Add_Click({ $dlgWin.Close() }.GetNewClosure())
@@ -3472,9 +3480,9 @@ function Show-SubscriptionSelector {
     [void]$dlgWin.ShowDialog()
 
     # If user cancelled or closed, return all subs (don't block scan)
-    if ($null -eq $script:_subSelectorResult) { return $Subscriptions }
-    if ($script:_subSelectorResult.Count -eq 0) { return $Subscriptions }
-    return $script:_subSelectorResult
+    $result = $dlgWin.Tag
+    if ($null -eq $result -or $result.Count -eq 0) { return $Subscriptions }
+    return $result
 }
 
 # -- Export Format Chooser Dialog ----------------------------------------

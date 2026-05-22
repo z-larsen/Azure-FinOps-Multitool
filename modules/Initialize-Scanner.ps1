@@ -143,6 +143,19 @@ function Initialize-Scanner {
         $seenTenantIds[$t.TenantId] = $true
     }
 
+    # Ensure the current context's tenant always appears (some tenants
+    # have policies that prevent Get-AzTenant from enumerating them)
+    if ($ctx.Tenant.Id -and -not $seenTenantIds.ContainsKey($ctx.Tenant.Id)) {
+        $ctxTenant = [PSCustomObject]@{
+            TenantId    = $ctx.Tenant.Id
+            Name        = $ctx.Tenant.Id  # Name unavailable; picker will show ID
+            Environment = $Environment
+        }
+        $allTenants.Add($ctxTenant)
+        $seenTenantIds[$ctx.Tenant.Id] = $true
+        Write-Host "  Added current tenant $($ctx.Tenant.Id) (not returned by Get-AzTenant)" -ForegroundColor Yellow
+    }
+
     # Probe the alternate environment for additional tenants (opt-in only)
     if ($IncludeAlternateCloud) {
         $altEnv = if ($Environment -eq 'AzureCloud') { 'AzureUSGovernment' } else { 'AzureCloud' }

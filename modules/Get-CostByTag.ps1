@@ -79,6 +79,9 @@ function Get-CostByTag {
     $useMgScope = Test-MgCostScope
     $mgPath = "/providers/Microsoft.Management/managementGroups/$TenantId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
 
+    # Track subs that don't support Tag grouping (HTTP 400 "Invalid dataset grouping")
+    $skipSubs = [System.Collections.Generic.HashSet[string]]::new()
+
     # Helper: parse Cost Management query response using column headers
     function Parse-CostRows {
         param($ResponseContent)
@@ -191,6 +194,7 @@ function Get-CostByTag {
                     $sampleHits = 0
                     for ($i = 0; $i -lt $sampleSize; $i++) {
                         $sub = $Subscriptions[$i]
+                        if ($skipSubs.Contains($sub.Id)) { continue }
                         $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
                         Write-Host "    Per-sub query: $($sub.Name) ($tf)..." -ForegroundColor Gray
                         $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
@@ -211,7 +215,12 @@ function Get-CostByTag {
                             if ($subRows.Count -gt 0) { $sampleHits++ }
                         } elseif ($subResp.Content) {
                             $errBody = try { ($subResp.Content | ConvertFrom-Json).error.message } catch { $subResp.Content.Substring(0, [math]::Min(300, $subResp.Content.Length)) }
-                            Write-Warning "    Per-sub error: $errBody"
+                            if ($errBody -match 'Invalid dataset grouping') {
+                                [void]$skipSubs.Add($sub.Id)
+                                Write-Host "    Skipping '$($sub.Name)' - subscription type does not support Tag grouping" -ForegroundColor Yellow
+                            } else {
+                                Write-Warning "    Per-sub error: $errBody"
+                            }
                         }
                     }
 
@@ -220,11 +229,14 @@ function Get-CostByTag {
                         Write-Host "    Sample found data, querying remaining $($Subscriptions.Count - $sampleSize) subs..." -ForegroundColor Cyan
                         for ($i = $sampleSize; $i -lt $Subscriptions.Count; $i++) {
                             $sub = $Subscriptions[$i]
+                            if ($skipSubs.Contains($sub.Id)) { continue }
                             $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
                             $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
                             if ($subResp.StatusCode -eq 200) {
                                 $subRows = Parse-CostRows -ResponseContent $subResp.Content
                                 foreach ($r in $subRows) { [void]$tagCosts.Add($r) }
+                            } elseif ($subResp.StatusCode -eq 400 -and $subResp.Content -match 'Invalid dataset grouping') {
+                                [void]$skipSubs.Add($sub.Id)
                             }
                         }
                     } elseif ($sampleHits -eq 0 -and $Subscriptions.Count -gt $sampleSize) {

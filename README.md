@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.2.0](https://img.shields.io/badge/Version-2.2.0-brightgreen)
+![Version 2.2.1](https://img.shields.io/badge/Version-2.2.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,13 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.2.1
+
+**Bug fixes:**
+- **Tenant detection** — current session tenant now always appears in the tenant picker even if `Get-AzTenant` doesn't enumerate it (common with corporate tenants that have conditional access policies)
+- **Subscription selector** — fixed closure scoping bug where `.GetNewClosure()` wrote results to a dynamic module scope instead of the caller's scope, causing all subscriptions to be scanned regardless of user selection
+- **Version label** — GUI version label now set dynamically from `$script:AppVersion` instead of a hardcoded XAML value
 
 ### v2.2.0
 
