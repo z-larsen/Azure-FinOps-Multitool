@@ -62,11 +62,11 @@ advisorresources
             # Categorize the recommendation
             $catText = "$problem $solution"
             $category = switch -Regex ($catText) {
-                'right.?siz|resize|downsize|scale down'    { 'Rightsize' }
-                'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate' }
-                'delet|unused|orphan|unattached'            { 'Delete Unused' }
-                'modern|upgrade|migrate|move to'           { 'Modernize' }
-                'burstable|B-series'                        { 'Rightsize' }
+                'right.?siz|resize|downsize|scale down'    { 'Rightsize'; break }
+                'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate'; break }
+                'delet|unused|orphan|unattached'            { 'Delete Unused'; break }
+                'modern|upgrade|migrate|move to'           { 'Modernize'; break }
+                'burstable|B-series'                        { 'Rightsize'; break }
                 default                                     { 'Other' }
             }
 
@@ -110,11 +110,11 @@ advisorresources
 
                     $catText = "$($rec.shortDescription.problem) $($rec.shortDescription.solution)"
                     $category = switch -Regex ($catText) {
-                        'right.?siz|resize|downsize|scale down'    { 'Rightsize' }
-                        'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate' }
-                        'delet|unused|orphan|unattached'            { 'Delete Unused' }
-                        'modern|upgrade|migrate|move to'           { 'Modernize' }
-                        'burstable|B-series'                        { 'Rightsize' }
+                        'right.?siz|resize|downsize|scale down'    { 'Rightsize'; break }
+                        'shut.?down|deallocate|idle|stopped'       { 'Shutdown / Deallocate'; break }
+                        'delet|unused|orphan|unattached'            { 'Delete Unused'; break }
+                        'modern|upgrade|migrate|move to'           { 'Modernize'; break }
+                        'burstable|B-series'                        { 'Rightsize'; break }
                         default                                     { 'Other' }
                     }
 
