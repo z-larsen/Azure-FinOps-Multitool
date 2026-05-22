@@ -1127,6 +1127,21 @@ function Populate-GuidanceTab {
         Get-CurrencySymbol -Code $d.ResourceCosts[0].Currency
     } else { '$' }
 
+    # Compute deduplicated savings (same logic as overview card)
+    $allGuidanceRecs = [System.Collections.Generic.List[PSCustomObject]]::new()
+    if ($d.Optimization -and $d.Optimization.Recommendations) {
+        foreach ($r in $d.Optimization.Recommendations) { [void]$allGuidanceRecs.Add($r) }
+    }
+    if ($d.Reservations -and $d.Reservations.AdvisorRecommendations) {
+        foreach ($r in $d.Reservations.AdvisorRecommendations) { [void]$allGuidanceRecs.Add($r) }
+    }
+    $dedupedTotal = 0
+    $recsWithSav = $allGuidanceRecs | Where-Object { $_.AnnualSavings -and $_.AnnualSavings -gt 0 }
+    $grpd = $recsWithSav | Group-Object { "$($_.SubscriptionId)|$($_.ResourceName)" }
+    foreach ($g in $grpd) {
+        $dedupedTotal += ($g.Group | Sort-Object AnnualSavings -Descending | Select-Object -First 1).AnnualSavings
+    }
+
     # =====================================================================
     # HELPER: Add a rich text line to a StackPanel
     # =====================================================================
@@ -1468,10 +1483,10 @@ function Populate-GuidanceTab {
 
     # --- Medium: Advisor recommendations ---
     if ($d.Optimization -and $d.Optimization.TotalCount -gt 0) {
-        $estSavings = $d.Optimization.EstimatedAnnualSavings.ToString('N2')
+        $estSavings = $dedupedTotal.ToString('N2')
         [void]$actions.Add([PSCustomObject]@{
             Priority = 3; Impact = 'Medium'; Category = 'Optimization'
-            Title = "$($d.Optimization.TotalCount) Advisor cost recommendations (est. $currency$estSavings/yr)"
+            Title = "$($d.Optimization.TotalCount + $(if ($d.Reservations) { $d.Reservations.TotalAdvisorCount } else { 0 })) Advisor cost recommendations (est. $currency$estSavings/yr deduplicated)"
             Detail = 'Review Azure Advisor recommendations on the Optimization tab. Common quick wins: rightsize VMs, delete unused resources, shut down dev/test outside business hours.'
         })
     }
@@ -1489,11 +1504,12 @@ function Populate-GuidanceTab {
     }
 
     # --- Medium: Reservation/SP advice ---
-    if ($d.Reservations -and ($d.Reservations.TotalAdvisorCount + $d.Reservations.TotalReservationCount) -gt 0) {
-        $riSavings = $d.Reservations.EstimatedAnnualSavings.ToString('N2')
+    if ($d.Reservations -and ($d.Reservations.TotalAdvisorCount + $d.Reservations.TotalReservationCount) -gt 0 -and -not ($d.Optimization -and $d.Optimization.TotalCount -gt 0)) {
+        # Only show RI/SP as separate item if Advisor recs weren't already shown (deduped total covers both)
+        $riSavings = $dedupedTotal.ToString('N2')
         [void]$actions.Add([PSCustomObject]@{
             Priority = 3; Impact = 'Medium'; Category = 'Optimization'
-            Title = "Evaluate RI/Savings Plan opportunities (est. $currency$riSavings/yr)"
+            Title = "Evaluate RI/Savings Plan opportunities (est. $currency$riSavings/yr deduplicated)"
             Detail = 'For steady-state workloads, Reserved Instances save 30-72% vs. pay-as-you-go. Savings Plans offer flexibility across VM families. Start with 1-year terms to reduce risk.'
         })
     }
@@ -1687,8 +1703,8 @@ function Populate-GuidanceTab {
         Add-GuidanceLine -Panel $script:OptimizePanel -Icon '$' -Bold "$($d.AHB.TotalOpportunities) AHB opportunity(s)." -Normal 'Apply Azure Hybrid Benefit to save 40-85% if you have existing Windows/SQL licenses with Software Assurance. Zero architectural change required.' -Color '#107C10'
     }
     if ($d.Reservations -and ($d.Reservations.TotalAdvisorCount + $d.Reservations.TotalReservationCount) -gt 0) {
-        $riSavings = $d.Reservations.EstimatedAnnualSavings.ToString('N2')
-        Add-GuidanceLine -Panel $script:OptimizePanel -Icon '$' -Bold "RI/SP opportunities: est. $currency$riSavings/yr savings." -Normal 'For steady-state workloads, commit to 1-year terms first to reduce risk. Savings Plans offer VM family flexibility.' -Color '#107C10'
+        $riSavings = $dedupedTotal.ToString('N2')
+        Add-GuidanceLine -Panel $script:OptimizePanel -Icon '$' -Bold "Total optimization potential: est. $currency$riSavings/yr (deduplicated)." -Normal 'Includes RI/SP, rightsize, shutdown, and cleanup recommendations. Start with 1-year RI terms to reduce risk.' -Color '#107C10'
     }
     if ($d.Optimization -and $d.Optimization.TotalCount -gt 0) {
         foreach ($cat in $d.Optimization.ByCategory) {
@@ -4427,7 +4443,8 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
     if ($d.Optimization -and $d.Optimization.TotalCount -gt 0) {
         [void]$sb.Append("<h3>Azure Advisor Cost Recommendations ($($d.Optimization.TotalCount))</h3>")
         if ($d.Optimization.EstimatedAnnualSavings -gt 0) {
-            [void]$sb.Append("<p>Estimated annual savings: <strong>$sym$($d.Optimization.EstimatedAnnualSavings.ToString('N2'))</strong></p>")
+            [void]$sb.Append("<p>Estimated annual savings: <strong>$sym$($d.Optimization.EstimatedAnnualSavings.ToString('N2'))</strong>")
+            [void]$sb.Append(" <span style=`"font-size:0.85em;color:#999`">(may include overlapping recommendations for the same resource)</span></p>")
         }
         [void]$sb.Append("<table><tr><th>Subscription</th><th>Category</th><th>Impact</th><th>Problem</th><th>Solution</th><th class=`"text-right`">Annual Savings</th></tr>")
         foreach ($rec in $d.Optimization.Recommendations | Sort-Object { switch ($_.Impact) { 'High' { 0 } 'Medium' { 1 } default { 2 } } }) {
