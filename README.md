@@ -15,15 +15,15 @@ A lightweight, read‑only scanner intended for use alongside native Azure Cost 
 
 ---
 
-## Why This Exists
+## The Why
 
-Most Azure customers know they have a FinOps problem. They don't know where to start.
+Many Azure customers know they have a FinOps problem. They don't know where to start.
 
 The standard path — deploy FinOps Hubs, configure FOCUS exports, build Power BI reports — is powerful, but it assumes time, Power BI expertise, and organizational buy-in that most teams don't have on day one. The result: customers stall before they get their first win.
 
 The Azure FinOps Multitool was built to solve the **cold start problem**. Run one script, get a complete picture of where your tenant stands: what things cost, what's untagged, what's orphaned, what policies are missing, and what your next three moves should be. No infrastructure to deploy. No dashboards to build. Just answers.
 
-It's designed as the on-ramp — the tool that earns the first conversation, surfaces the first wins, and gives customers the foundation they need to grow into the full FinOps Toolkit and Cost Management capabilities Microsoft provides.
+It's designed as the on-ramp and is the tool that surfaces the first wins, and gives customers the foundation they need to grow into the full FinOps Toolkit and Cost Management capabilities Microsoft provides.
 
 ---
 
