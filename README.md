@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.2.1](https://img.shields.io/badge/Version-2.2.1-brightgreen)
+![Version 2.3.0](https://img.shields.io/badge/Version-2.3.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.3.0
+
+**New features:**
+- **Savings deduplication** — the Est. Annual Savings card now groups recommendations by resource and keeps only the highest-savings action per resource, preventing inflated totals from overlapping Advisor recommendations (e.g., RI + right-size + shutdown for the same VM)
+- **Savings detail label** — shows "Deduplicated per resource" when overlapping recommendations are detected, with a tooltip showing the raw total before dedup
 
 ### v2.2.1
 

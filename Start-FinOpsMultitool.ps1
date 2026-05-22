@@ -276,7 +276,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.2.1'
+$script:AppVersion = '2.3.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -332,7 +332,7 @@ $controls = @(
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
-    'ForecastText', 'SubCountText', 'TotalSavingsText', 'SubCostGrid',
+    'ForecastText', 'SubCountText', 'TotalSavingsText', 'TotalSavingsDetail', 'SubCostGrid',
     'ResourceCostGrid',
     'ResourceCountNote',
     # Cost Analysis
@@ -546,11 +546,34 @@ function Populate-OverviewTab {
     $script:TotalCostText.Text  = "$(Get-CurrencySymbol $currency)$($totalActual.ToString('N2'))"
     $script:ForecastText.Text   = "$(Get-CurrencySymbol $currency)$($totalForecast.ToString('N2'))"
 
-    # Total savings
+    # Total savings (deduplicated: keep only highest-savings rec per resource)
+    $allSavingsRecs = [System.Collections.Generic.List[PSCustomObject]]::new()
+    if ($d.Optimization -and $d.Optimization.Recommendations) {
+        foreach ($r in $d.Optimization.Recommendations) { [void]$allSavingsRecs.Add($r) }
+    }
+    if ($d.Reservations -and $d.Reservations.AdvisorRecommendations) {
+        foreach ($r in $d.Reservations.AdvisorRecommendations) { [void]$allSavingsRecs.Add($r) }
+    }
+
+    # Group by resource key (sub + resource name); keep max savings per resource
     $totalSavings = 0
-    if ($d.Optimization) { $totalSavings += $d.Optimization.EstimatedAnnualSavings }
-    if ($d.Reservations) { $totalSavings += $d.Reservations.EstimatedAnnualSavings }
-    $script:TotalSavingsText.Text = "`$$($totalSavings.ToString('N2'))/yr"
+    $rawTotal = 0
+    $recsWithSavings = $allSavingsRecs | Where-Object { $_.AnnualSavings -and $_.AnnualSavings -gt 0 }
+    $rawTotal = ($recsWithSavings | Measure-Object -Property AnnualSavings -Sum).Sum
+    $grouped = $recsWithSavings | Group-Object { "$($_.SubscriptionId)|$($_.ResourceName)" }
+    foreach ($g in $grouped) {
+        $totalSavings += ($g.Group | Sort-Object AnnualSavings -Descending | Select-Object -First 1).AnnualSavings
+    }
+
+    $sym = Get-CurrencySymbol $currency
+    $script:TotalSavingsText.Text = "$sym$($totalSavings.ToString('N2'))/yr"
+    # Show tooltip with raw vs deduped if there's overlap
+    if ($rawTotal -gt 0 -and [math]::Abs($rawTotal - $totalSavings) -gt 1) {
+        $script:TotalSavingsText.ToolTip = "Raw total: $sym$($rawTotal.ToString('N2'))/yr (before removing overlapping recommendations for the same resource)"
+        $script:TotalSavingsDetail.Text = "Deduplicated per resource"
+    } else {
+        $script:TotalSavingsDetail.Text = "Based on Advisor recommendations"
+    }
 
     # Savings Realized card
     if ($d.Savings) {
