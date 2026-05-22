@@ -135,7 +135,7 @@ function Initialize-Scanner {
     $allTenants = [System.Collections.Generic.List[object]]::new()
     $seenTenantIds = @{}
 
-    # Get tenants from current environment
+    # Get tenants from current environment (Az PowerShell)
     $tenants = @(Get-AzTenant -ErrorAction SilentlyContinue)
     foreach ($t in $tenants) {
         $t | Add-Member -NotePropertyName 'Environment' -NotePropertyValue $Environment -Force
@@ -154,6 +154,43 @@ function Initialize-Scanner {
         $allTenants.Add($ctxTenant)
         $seenTenantIds[$ctx.Tenant.Id] = $true
         Write-Host "  Added current tenant $($ctx.Tenant.Id) (not returned by Get-AzTenant)" -ForegroundColor Yellow
+    }
+
+    # Also pull tenants from Azure CLI (az account list) — the CLI often
+    # has a broader token cache than Az PowerShell's Get-AzTenant
+    try {
+        $cliAccounts = az account list --all --query "[].{tid:tenantId, name:tenantDisplayName, env:environmentName}" -o json 2>$null | ConvertFrom-Json
+        if ($cliAccounts) {
+            $cliTenants = $cliAccounts | Group-Object tid
+            foreach ($grp in $cliTenants) {
+                $tid = $grp.Name
+                if (-not $seenTenantIds.ContainsKey($tid)) {
+                    $first = $grp.Group[0]
+                    $tName = if ($first.name) { $first.name } else { $tid }
+                    $tEnv = switch ($first.env) {
+                        'AzureUSGovernment' { 'AzureUSGovernment' }
+                        'AzureChinaCloud'   { 'AzureChinaCloud' }
+                        default             { 'AzureCloud' }
+                    }
+                    # Only add if it matches our target environment (or if env wasn't specified)
+                    if ($tEnv -eq $Environment) {
+                        $cliTenant = [PSCustomObject]@{
+                            TenantId    = $tid
+                            Name        = $tName
+                            Environment = $tEnv
+                        }
+                        $allTenants.Add($cliTenant)
+                        $seenTenantIds[$tid] = $true
+                    }
+                }
+            }
+            $cliAdded = $allTenants.Count - $tenants.Count
+            if ($cliAdded -gt 0) {
+                Write-Host "  Added $cliAdded additional tenant(s) from Azure CLI cache" -ForegroundColor Yellow
+            }
+        }
+    } catch {
+        Write-Host "  Azure CLI not available for tenant discovery (Get-AzTenant only)" -ForegroundColor DarkGray
     }
 
     # Probe the alternate environment for additional tenants (opt-in only)
