@@ -4536,6 +4536,21 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
             [void]$sb.Append("<td class=`"text-right`">$([math]::Round($b.PctUsed,1))%</td><td class=`"$riskCls`">$($b.Risk)</td></tr>")
         }
         [void]$sb.Append("</table>")
+
+        # Budget History (6-month lookback)
+        if ($script:budgetHistoryLoaded -and $script:budgetHistory.Count -gt 0) {
+            [void]$sb.Append('<h3>Budget History (Last 6 Months)</h3>')
+            [void]$sb.Append('<p>Monthly spend vs. budget amount. Highlights periods where spend exceeded the budget.</p>')
+            [void]$sb.Append("<table><tr><th>Subscription</th><th>Budget</th><th>Month</th><th class=`"text-right`">Budget Amount</th><th class=`"text-right`">Actual Spend</th><th class=`"text-right`">% Used</th><th>Status</th></tr>")
+            foreach ($h in $script:budgetHistory) {
+                $hSym = Get-CurrencySymbol $h.Currency
+                $statusCls = switch ($h.Status) { 'Over' { 'status-warn' } 'Near Limit' { 'status-warn' } default { 'status-good' } }
+                [void]$sb.Append("<tr><td>$($esc::Escape($h.Subscription))</td><td>$($esc::Escape($h.BudgetName))</td><td>$($h.Month)</td>")
+                [void]$sb.Append("<td class=`"text-right`">$hSym$($h.BudgetAmount.ToString('N2'))</td><td class=`"text-right`">$hSym$($h.ActualSpend.ToString('N2'))</td>")
+                [void]$sb.Append("<td class=`"text-right`">$($h.PctUsed)%</td><td class=`"$statusCls`">$($h.Status)</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
     } else {
         [void]$sb.Append('<p class="text-muted">No budgets configured. Consider creating budgets for all production subscriptions.</p>')
     }
