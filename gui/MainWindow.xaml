@@ -570,6 +570,14 @@
                             <TextBlock x:Name="BudgetSubSummary" Text="" FontSize="12" Foreground="#666" Margin="0,0,0,8" TextWrapping="Wrap"/>
                             <DataGrid x:Name="BudgetDetailGrid" MaxHeight="250"/>
 
+                            <!-- Budget History Section -->
+                            <TextBlock Text="Budget History" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="0,0,0,8">
+                                Monthly spend vs. budget amount for the last 6 months. Shows whether each period came in under or over budget.
+                            </TextBlock>
+                            <TextBlock x:Name="BudgetHistoryStatus" Text="" FontSize="12" Foreground="#999" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                            <DataGrid x:Name="BudgetHistoryGrid" MaxHeight="300"/>
+
                             <!-- Deploy Budget Section -->
                             <TextBlock Text="Deploy a Budget" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
                             <StackPanel x:Name="BudgetDeployPanel">

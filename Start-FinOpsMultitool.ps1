@@ -369,6 +369,7 @@ $controls = @(
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
     # Budgets Tab
     'BudgetSubSelector', 'BudgetSubSummary', 'BudgetDetailGrid',
+    'BudgetHistoryGrid', 'BudgetHistoryStatus',
     'BudgetDeployPanel', 'BudgetDeployScopeSelector',
     'BudgetDeployNameInput', 'BudgetDeployAmountInput', 'BudgetDeployGrainSelector',
     'BudgetDeployEmailInput', 'BudgetActionGroupSelector',
@@ -425,6 +426,8 @@ $script:scanData = @{
     StorageTier   = $null
     IdleVMs       = $null
 }
+$script:budgetHistoryLoaded = $false
+$script:budgetHistory = @()
 
 # -- Session Action Log (tags deployed/removed, policies assigned/unassigned) --
 $script:actionLog = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -3013,6 +3016,21 @@ function Populate-BudgetsTab {
     }
     $script:BudgetDeployTagNameSelector.SelectedIndex = 0
 
+    # Populate budget history (lazy load on first visit)
+    if ($d.Budgets -and $d.Budgets.HasData -and -not $script:budgetHistoryLoaded) {
+        $script:BudgetHistoryStatus.Text = 'Loading budget history (last 6 months)...'
+        try {
+            $script:budgetHistory = Get-BudgetHistory -Budgets $d.Budgets.Budgets -MonthsBack 6
+            $script:budgetHistoryLoaded = $true
+            Update-BudgetHistoryView
+        } catch {
+            $script:BudgetHistoryStatus.Text = "Could not load budget history: $($_.Exception.Message)"
+        }
+    } elseif (-not $d.Budgets -or -not $d.Budgets.HasData) {
+        $script:BudgetHistoryStatus.Text = 'No budgets configured. Deploy a budget below to start tracking history.'
+        $script:BudgetHistoryGrid.ItemsSource = @()
+    }
+
     # Populate budget policy scope selector
     $script:BudgetPolicyScopeSelector.Items.Clear()
     foreach ($sub in $d.Auth.Subscriptions) {
@@ -3069,6 +3087,46 @@ function Update-BudgetDetailView {
         }
         $script:BudgetDetailGrid.ItemsSource = @()
     }
+
+    # Also update history view if loaded
+    if ($script:budgetHistoryLoaded) { Update-BudgetHistoryView }
+}
+
+function Update-BudgetHistoryView {
+    if (-not $script:budgetHistory -or $script:budgetHistory.Count -eq 0) {
+        $script:BudgetHistoryStatus.Text = 'No budget history data available.'
+        $script:BudgetHistoryGrid.ItemsSource = @()
+        return
+    }
+
+    $selectedName = $script:BudgetSubSelector.SelectedItem
+    $filtered = $script:budgetHistory
+    if ($selectedName -and $selectedName -ne 'All Subscriptions') {
+        $filtered = @($filtered | Where-Object { $_.Subscription -eq $selectedName })
+    }
+
+    if ($filtered.Count -eq 0) {
+        $script:BudgetHistoryStatus.Text = 'No history for the selected subscription.'
+        $script:BudgetHistoryGrid.ItemsSource = @()
+        return
+    }
+
+    $sym = Get-CurrencySymbol $filtered[0].Currency
+    $rows = $filtered | ForEach-Object {
+        [PSCustomObject]@{
+            'Subscription'  = $_.Subscription
+            'Budget'        = $_.BudgetName
+            'Month'         = $_.Month
+            'Budget Amount' = "$sym$(([double]$_.BudgetAmount).ToString('N2'))"
+            'Actual Spend'  = "$sym$(([double]$_.ActualSpend).ToString('N2'))"
+            '% Used'        = "$($_.PctUsed)%"
+            'Status'        = $_.Status
+        }
+    }
+
+    $overCount = @($filtered | Where-Object { $_.Status -eq 'Over' }).Count
+    $script:BudgetHistoryStatus.Text = "$($filtered.Count) budget-month records. $overCount exceeded budget."
+    $script:BudgetHistoryGrid.ItemsSource = @($rows)
 }
 
 function Deploy-BudgetFromTab {
@@ -4617,6 +4675,7 @@ $script:scanStages = @(
         try { Populate-ResourcesTab }      catch { Write-Warning "Populate-ResourcesTab failed: $($_.Exception.Message)" }
         $script:tagDeployScopesLoaded = $false   # Reset so scopes reload on next tag deploy
         $script:policyDeployScopesLoaded = $false  # Reset so scopes reload on next policy deploy
+        $script:budgetHistoryLoaded = $false        # Reset so history reloads on next Budgets tab visit
     }}
     @{ Label = 'Scan complete!';                       Pct = 100; Action = {
         $script:ExportButton.IsEnabled = $true

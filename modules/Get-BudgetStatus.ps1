@@ -184,3 +184,112 @@ function Get-BudgetStatus {
         } else { 0 }
     }
 }
+
+function Get-BudgetHistory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Budgets,
+
+        [Parameter()]
+        [int]$MonthsBack = 6
+    )
+
+    if (-not $Budgets -or $Budgets.Count -eq 0) { return @() }
+
+    $history = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # Group budgets by subscription to minimize API calls
+    $bySubId = $Budgets | Group-Object SubscriptionId
+
+    foreach ($subGroup in $bySubId) {
+        $subId   = $subGroup.Name
+        $subName = $subGroup.Group[0].Subscription
+
+        # Query monthly costs for this sub over the last N months
+        $startDate = (Get-Date).AddMonths(-$MonthsBack).ToString('yyyy-MM-01')
+        $endDate   = (Get-Date -Day 1).AddDays(-1).ToString('yyyy-MM-dd')  # Last day of previous month
+
+        $body = @{
+            type      = 'ActualCost'
+            timeframe = 'Custom'
+            timePeriod = @{ from = $startDate; to = $endDate }
+            dataset   = @{
+                granularity = 'Monthly'
+                aggregation = @{
+                    totalCost = @{ name = 'Cost'; function = 'Sum' }
+                }
+            }
+        } | ConvertTo-Json -Depth 10
+
+        $costPath = "/subscriptions/$subId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+        try {
+            $resp = Invoke-AzRestMethodWithRetry -Path $costPath -Method POST -Payload $body
+            if ($resp.StatusCode -ne 200) { continue }
+
+            $result = ($resp.Content | ConvertFrom-Json)
+            if (-not $result.properties -or -not $result.properties.rows) { continue }
+
+            # Parse columns
+            $cols = $result.properties.columns
+            $costIdx = -1; $dateIdx = -1; $currIdx = -1
+            for ($i = 0; $i -lt $cols.Count; $i++) {
+                $n = $cols[$i].name.ToLower()
+                if ($n -eq 'cost' -or $n -eq 'totalcost' -or $n -match 'pretaxcost') { $costIdx = $i }
+                elseif ($n -match 'billingmonth|usagedate') { $dateIdx = $i }
+                elseif ($n -match 'currency|billingcurrency') { $currIdx = $i }
+            }
+            if ($costIdx -eq -1) { $costIdx = 0 }
+            if ($dateIdx -eq -1) { $dateIdx = 1 }
+            if ($currIdx -eq -1) { $currIdx = 2 }
+
+            # Build month → cost lookup
+            $monthlyCosts = @{}
+            foreach ($row in $result.properties.rows) {
+                $cost = [math]::Round([double]$row[$costIdx], 2)
+                $dateVal = $row[$dateIdx].ToString()
+                # API returns YYYYMMDD format — extract YYYY-MM
+                $monthKey = if ($dateVal.Length -ge 6) { "$($dateVal.Substring(0,4))-$($dateVal.Substring(4,2))" } else { $dateVal }
+                $monthlyCosts[$monthKey] = $cost
+            }
+
+            # Now create history rows per budget per month
+            foreach ($budget in $subGroup.Group) {
+                $budgetAmount = [double]$budget.Amount
+                # For quarterly/annual budgets, pro-rate to monthly equivalent
+                $monthlyAmount = switch ($budget.TimeGrain) {
+                    'Quarterly' { [math]::Round($budgetAmount / 3, 2) }
+                    'Annually'  { [math]::Round($budgetAmount / 12, 2) }
+                    default     { $budgetAmount }
+                }
+
+                for ($m = $MonthsBack; $m -ge 1; $m--) {
+                    $monthDate = (Get-Date).AddMonths(-$m)
+                    $monthKey  = $monthDate.ToString('yyyy-MM')
+                    $monthLabel = $monthDate.ToString('MMM yyyy')
+                    $actual = if ($monthlyCosts.ContainsKey($monthKey)) { $monthlyCosts[$monthKey] } else { 0 }
+                    $pctUsed = if ($monthlyAmount -gt 0) { [math]::Round(($actual / $monthlyAmount) * 100, 1) } else { 0 }
+                    $status = if ($pctUsed -gt 100) { 'Over' }
+                              elseif ($pctUsed -gt 90) { 'Near Limit' }
+                              else { 'Under' }
+
+                    [void]$history.Add([PSCustomObject]@{
+                        Subscription = $subName
+                        BudgetName   = $budget.BudgetName
+                        Month        = $monthLabel
+                        MonthSort    = $monthKey
+                        BudgetAmount = $monthlyAmount
+                        ActualSpend  = $actual
+                        PctUsed      = $pctUsed
+                        Status       = $status
+                        Currency     = $budget.Currency
+                    })
+                }
+            }
+        } catch {
+            Write-Warning "  Budget history query failed for $subName : $($_.Exception.Message)"
+        }
+    }
+
+    return @($history | Sort-Object Subscription, BudgetName, MonthSort)
+}
