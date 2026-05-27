@@ -118,7 +118,7 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
-                        <TextBlock x:Name="VersionLabel" Text="v2.3.0" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                        <TextBlock x:Name="VersionLabel" Text="v2.0.1" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
                     </StackPanel>
                     <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
@@ -130,8 +130,6 @@
                             Background="Transparent" Foreground="White" BorderBrush="#8DC6FF" Margin="0,0,8,0"/>
                     <Button x:Name="ScanButton" Content="&#x26A1; Scan" Style="{StaticResource AzureButton}"
                             Background="White" Foreground="#0078D4" Margin="0,0,8,0"/>
-                    <Button x:Name="CancelScanButton" Content="&#x274C; Cancel" Style="{StaticResource AzureButton}"
-                            Background="#E81123" Foreground="White" Margin="0,0,8,0" Visibility="Collapsed"/>
                     <Button x:Name="ExportButton" Content="&#x1F4CA; Export Scan Results" Style="{StaticResource AzureButton}"
                             Background="Transparent" Foreground="White" BorderBrush="White" IsEnabled="False"/>
                 </StackPanel>
@@ -207,7 +205,6 @@
                                     <StackPanel>
                                         <TextBlock Text="Est. Annual Savings" FontSize="11" Foreground="#999"/>
                                         <TextBlock x:Name="TotalSavingsText" Text="&#x2014;" FontSize="20" FontWeight="Bold" Foreground="#107C10" Margin="0,4,0,0"/>
-                                        <TextBlock x:Name="TotalSavingsDetail" Text="" FontSize="9" Foreground="#999" TextWrapping="Wrap" Margin="0,2,0,0"/>
                                     </StackPanel>
                                 </Border>
                                 <Border Style="{StaticResource Card}" Width="190">
@@ -218,6 +215,11 @@
                                     </StackPanel>
                                 </Border>
                             </WrapPanel>
+
+                            <!-- Cost Access Warning Banner -->
+                            <Border x:Name="CostAccessWarning" Visibility="Collapsed" Background="#FFF4CE" BorderBrush="#F7D154" BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,0,0,10">
+                                <TextBlock x:Name="CostAccessWarningText" TextWrapping="Wrap" FontSize="12" Foreground="#6B5900"/>
+                            </Border>
 
                             <!-- Subscription Cost Table -->
                             <TextBlock Text="Subscription Costs" Style="{StaticResource SectionHeader}"/>
@@ -569,14 +571,6 @@
                             <!-- Budget Detail for Selected Sub -->
                             <TextBlock x:Name="BudgetSubSummary" Text="" FontSize="12" Foreground="#666" Margin="0,0,0,8" TextWrapping="Wrap"/>
                             <DataGrid x:Name="BudgetDetailGrid" MaxHeight="250"/>
-
-                            <!-- Budget History Section -->
-                            <TextBlock Text="Budget History" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="0,0,0,8">
-                                Monthly spend vs. budget amount for the last 6 months. Shows whether each period came in under or over budget.
-                            </TextBlock>
-                            <TextBlock x:Name="BudgetHistoryStatus" Text="" FontSize="12" Foreground="#999" Margin="0,0,0,4" TextWrapping="Wrap"/>
-                            <DataGrid x:Name="BudgetHistoryGrid" MaxHeight="300"/>
 
                             <!-- Deploy Budget Section -->
                             <TextBlock Text="Deploy a Budget" Style="{StaticResource SectionHeader}" Margin="0,20,0,0"/>
