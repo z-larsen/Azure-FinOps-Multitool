@@ -66,12 +66,22 @@ function Get-CostByTag {
     if ($ExistingTags) {
         $alreadyLower = $tagsToQuery | ForEach-Object { $_.ToLower() }
         $systemPrefixes = @('hidden-', 'ms-resource-', 'aks-managed-', 'kubernetes.io', 'displayname')
+        # Exact-match system/auto-generated tags (Azure Policy, Monitor, Automanage, etc.)
+        $systemExact = @(
+            'action', 'automanage', 'contact', 'alertrulecreatedwithalertsrecommendations',
+            'createdby', 'createddate', 'createdtime', 'createdon',
+            'environment-type', 'intune-deployed', 'policyassignmentname',
+            'statuschangedate', 'vmsize', 'offer', 'publisher', 'sku'
+        )
         $extras = @()
         foreach ($key in $ExistingTags.Keys) {
             if ($key.ToLower() -in $alreadyLower) { continue }
             $skip = $false
-            foreach ($prefix in $systemPrefixes) {
-                if ($key.ToLower().StartsWith($prefix)) { $skip = $true; break }
+            if ($key.ToLower() -in $systemExact) { $skip = $true }
+            if (-not $skip) {
+                foreach ($prefix in $systemPrefixes) {
+                    if ($key.ToLower().StartsWith($prefix)) { $skip = $true; break }
+                }
             }
             if (-not $skip) {
                 $coverage = if ($ExistingTags[$key].TotalResources) { $ExistingTags[$key].TotalResources } else { 0 }
