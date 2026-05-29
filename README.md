@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.3.0](https://img.shields.io/badge/Version-2.3.0-brightgreen)
+![Version 2.3.1](https://img.shields.io/badge/Version-2.3.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,13 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.3.1
+
+**Bug fixes (regression restore):**
+- **GUI controls restored** — a stale copy had dropped the Cancel Scan button, the savings detail label, and the entire Budget History section (6-month lookback grid + HTML export). All are restored along with their event wiring.
+- **Savings deduplication restored** — the Est. Annual Savings card again groups recommendations by resource and keeps only the highest-savings action per resource, with the raw-vs-deduped tooltip and "Deduplicated per resource" detail label.
+- **Version label restored** — GUI version label is set dynamically from `$script:AppVersion` again (XAML fallback also synced).
 
 ### v2.3.0
 

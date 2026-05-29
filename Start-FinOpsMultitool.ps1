@@ -285,6 +285,9 @@ function Search-AzGraphSafe {
     return $null  # All retries exhausted
 }
 
+# -- Version -----------------------------------------------------------
+$script:AppVersion = '2.3.1'
+
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
 $modulePath = Join-Path $PSScriptRoot 'modules'
@@ -335,11 +338,11 @@ if (Test-Path $icoPath) {
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportButton',
+    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'CancelScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
-    'ForecastText', 'SubCountText', 'TotalSavingsText', 'SubCostGrid',
+    'ForecastText', 'SubCountText', 'TotalSavingsText', 'TotalSavingsDetail', 'SubCostGrid',
     'CostAccessWarning', 'CostAccessWarningText',
     'ResourceCostGrid',
     'ResourceCountNote',
@@ -377,6 +380,7 @@ $controls = @(
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
     # Budgets Tab
     'BudgetSubSelector', 'BudgetSubSummary', 'BudgetDetailGrid',
+    'BudgetHistoryGrid', 'BudgetHistoryStatus',
     'BudgetDeployPanel', 'BudgetDeployScopeSelector',
     'BudgetDeployNameInput', 'BudgetDeployAmountInput', 'BudgetDeployGrainSelector',
     'BudgetDeployEmailInput', 'BudgetActionGroupSelector',
@@ -406,6 +410,9 @@ foreach ($name in $controls) {
     if ($ctrl) { Set-Variable -Name $name -Value $ctrl -Scope Script }
 }
 
+# Set version label dynamically so it stays in sync
+if ($script:VersionLabel) { $script:VersionLabel.Text = "v$($script:AppVersion)" }
+
 # -- Global Scan Data --------------------------------------------------
 $script:scanData = @{
     Auth          = $null
@@ -430,6 +437,9 @@ $script:scanData = @{
     StorageTier   = $null
     IdleVMs       = $null
 }
+$script:budgetHistoryLoaded = $false
+$script:budgetHistory = @()
+$script:scanCancelled = $false
 
 # -- Session Action Log (tags deployed/removed, policies assigned/unassigned) --
 $script:actionLog = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -579,11 +589,34 @@ function Populate-OverviewTab {
     $script:TotalCostText.Text = "$(Get-CurrencySymbol $currency)$($totalActual.ToString('N2'))"
     $script:ForecastText.Text = "$(Get-CurrencySymbol $currency)$($totalForecast.ToString('N2'))"
 
-    # Total savings
+    # Total savings (deduplicated: keep only highest-savings rec per resource)
+    $allSavingsRecs = [System.Collections.Generic.List[PSCustomObject]]::new()
+    if ($d.Optimization -and $d.Optimization.Recommendations) {
+        foreach ($r in $d.Optimization.Recommendations) { [void]$allSavingsRecs.Add($r) }
+    }
+    if ($d.Reservations -and $d.Reservations.AdvisorRecommendations) {
+        foreach ($r in $d.Reservations.AdvisorRecommendations) { [void]$allSavingsRecs.Add($r) }
+    }
+
+    # Group by resource key (sub + resource name); keep max savings per resource
     $totalSavings = 0
-    if ($d.Optimization) { $totalSavings += $d.Optimization.EstimatedAnnualSavings }
-    if ($d.Reservations) { $totalSavings += $d.Reservations.EstimatedAnnualSavings }
-    $script:TotalSavingsText.Text = "`$$($totalSavings.ToString('N2'))/yr"
+    $rawTotal = 0
+    $recsWithSavings = $allSavingsRecs | Where-Object { $_.AnnualSavings -and $_.AnnualSavings -gt 0 }
+    $rawTotal = ($recsWithSavings | Measure-Object -Property AnnualSavings -Sum).Sum
+    $grouped = $recsWithSavings | Group-Object { "$($_.SubscriptionId)|$($_.ResourceName)" }
+    foreach ($g in $grouped) {
+        $totalSavings += ($g.Group | Sort-Object AnnualSavings -Descending | Select-Object -First 1).AnnualSavings
+    }
+
+    $sym = Get-CurrencySymbol $currency
+    $script:TotalSavingsText.Text = "$sym$($totalSavings.ToString('N2'))/yr"
+    # Show tooltip with raw vs deduped if there's overlap
+    if ($rawTotal -gt 0 -and [math]::Abs($rawTotal - $totalSavings) -gt 1) {
+        $script:TotalSavingsText.ToolTip = "Raw total: $sym$($rawTotal.ToString('N2'))/yr (before removing overlapping recommendations for the same resource)"
+        $script:TotalSavingsDetail.Text = "Deduplicated per resource"
+    } else {
+        $script:TotalSavingsDetail.Text = "Based on Advisor recommendations"
+    }
 
     # Savings Realized card
     if ($d.Savings) {
@@ -3088,6 +3121,21 @@ function Populate-BudgetsTab {
     }
     $script:BudgetDeployTagNameSelector.SelectedIndex = 0
 
+    # Populate budget history (lazy load on first visit)
+    if ($d.Budgets -and $d.Budgets.HasData -and -not $script:budgetHistoryLoaded) {
+        $script:BudgetHistoryStatus.Text = 'Loading budget history (last 6 months)...'
+        try {
+            $script:budgetHistory = Get-BudgetHistory -Budgets $d.Budgets.Budgets -MonthsBack 6
+            $script:budgetHistoryLoaded = $true
+            Update-BudgetHistoryView
+        } catch {
+            $script:BudgetHistoryStatus.Text = "Could not load budget history: $($_.Exception.Message)"
+        }
+    } elseif (-not $d.Budgets -or -not $d.Budgets.HasData) {
+        $script:BudgetHistoryStatus.Text = 'No budgets configured. Deploy a budget below to start tracking history.'
+        $script:BudgetHistoryGrid.ItemsSource = @()
+    }
+
     # Populate budget policy scope selector
     $script:BudgetPolicyScopeSelector.Items.Clear()
     foreach ($sub in $d.Auth.Subscriptions) {
@@ -3146,6 +3194,46 @@ function Update-BudgetDetailView {
         }
         $script:BudgetDetailGrid.ItemsSource = @()
     }
+
+    # Also update history view if loaded
+    if ($script:budgetHistoryLoaded) { Update-BudgetHistoryView }
+}
+
+function Update-BudgetHistoryView {
+    if (-not $script:budgetHistory -or $script:budgetHistory.Count -eq 0) {
+        $script:BudgetHistoryStatus.Text = 'No budget history data available.'
+        $script:BudgetHistoryGrid.ItemsSource = @()
+        return
+    }
+
+    $selectedName = $script:BudgetSubSelector.SelectedItem
+    $filtered = $script:budgetHistory
+    if ($selectedName -and $selectedName -ne 'All Subscriptions') {
+        $filtered = @($filtered | Where-Object { $_.Subscription -eq $selectedName })
+    }
+
+    if ($filtered.Count -eq 0) {
+        $script:BudgetHistoryStatus.Text = 'No history for the selected subscription.'
+        $script:BudgetHistoryGrid.ItemsSource = @()
+        return
+    }
+
+    $sym = Get-CurrencySymbol $filtered[0].Currency
+    $rows = $filtered | ForEach-Object {
+        [PSCustomObject]@{
+            'Subscription'  = $_.Subscription
+            'Budget'        = $_.BudgetName
+            'Month'         = $_.Month
+            'Budget Amount' = "$sym$(([double]$_.BudgetAmount).ToString('N2'))"
+            'Actual Spend'  = "$sym$(([double]$_.ActualSpend).ToString('N2'))"
+            '% Used'        = "$($_.PctUsed)%"
+            'Status'        = $_.Status
+        }
+    }
+
+    $overCount = @($filtered | Where-Object { $_.Status -eq 'Over' }).Count
+    $script:BudgetHistoryStatus.Text = "$($filtered.Count) budget-month records. $overCount exceeded budget."
+    $script:BudgetHistoryGrid.ItemsSource = @($rows)
 }
 
 function Deploy-BudgetFromTab {
@@ -4569,6 +4657,21 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
             [void]$sb.Append("<td class=`"text-right`">$([math]::Round($b.PctUsed,1))%</td><td class=`"$riskCls`">$($b.Risk)</td></tr>")
         }
         [void]$sb.Append("</table>")
+
+        # Budget History (6-month lookback)
+        if ($script:budgetHistoryLoaded -and $script:budgetHistory.Count -gt 0) {
+            [void]$sb.Append('<h3>Budget History (Last 6 Months)</h3>')
+            [void]$sb.Append('<p>Monthly spend vs. budget amount. Highlights periods where spend exceeded the budget.</p>')
+            [void]$sb.Append("<table><tr><th>Subscription</th><th>Budget</th><th>Month</th><th class=`"text-right`">Budget Amount</th><th class=`"text-right`">Actual Spend</th><th class=`"text-right`">% Used</th><th>Status</th></tr>")
+            foreach ($h in $script:budgetHistory) {
+                $hSym = Get-CurrencySymbol $h.Currency
+                $statusCls = switch ($h.Status) { 'Over' { 'status-warn' } 'Near Limit' { 'status-warn' } default { 'status-good' } }
+                [void]$sb.Append("<tr><td>$($esc::Escape($h.Subscription))</td><td>$($esc::Escape($h.BudgetName))</td><td>$($h.Month)</td>")
+                [void]$sb.Append("<td class=`"text-right`">$hSym$($h.BudgetAmount.ToString('N2'))</td><td class=`"text-right`">$hSym$($h.ActualSpend.ToString('N2'))</td>")
+                [void]$sb.Append("<td class=`"text-right`">$($h.PctUsed)%</td><td class=`"$statusCls`">$($h.Status)</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
     }
     else {
         [void]$sb.Append('<p class="text-muted">No budgets configured. Consider creating budgets for all production subscriptions.</p>')
@@ -4732,6 +4835,7 @@ $script:scanStages = @(
             try { Populate-ResourcesTab }      catch { Write-Warning "Populate-ResourcesTab failed: $($_.Exception.Message)" }
             $script:tagDeployScopesLoaded = $false   # Reset so scopes reload on next tag deploy
             $script:policyDeployScopesLoaded = $false  # Reset so scopes reload on next policy deploy
+            $script:budgetHistoryLoaded = $false        # Reset so history reloads on next Budgets tab visit
         }
     }
     @{ Label = 'Scan complete!'; Pct = 100; Action = {
@@ -4745,8 +4849,11 @@ $script:scanTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:scanTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 
 $script:scanTimer.Add_Tick({
+        if ($script:scanCancelled) { return }
         if ($script:currentStage -ge $script:scanStages.Count) {
             $script:scanTimer.Stop()
+            $script:CancelScanButton.Visibility = 'Collapsed'
+            $script:ScanButton.Visibility = 'Visible'
             $script:ScanButton.IsEnabled = $true
             $script:TenantButton.IsEnabled = $true
             $script:GovTenantButton.IsEnabled = $true
@@ -4773,6 +4880,8 @@ $script:scanTimer.Add_Tick({
             # If authentication failed, abort the entire scan
             if (-not $script:scanData.Auth) {
                 $script:scanTimer.Stop()
+                $script:CancelScanButton.Visibility = 'Collapsed'
+                $script:ScanButton.Visibility = 'Visible'
                 $script:ScanButton.IsEnabled = $true
                 $script:TenantButton.IsEnabled = $true
                 $script:GovTenantButton.IsEnabled = $true
@@ -4793,12 +4902,37 @@ $script:scanTimer.Add_Tick({
 # Scan Button
 $script:ScanButton.Add_Click({
         $script:ScanButton.IsEnabled = $false
+        $script:ScanButton.Visibility = 'Collapsed'
+        $script:CancelScanButton.Visibility = 'Visible'
         $script:TenantButton.IsEnabled = $false
         $script:GovTenantButton.IsEnabled = $false
         $script:ExportButton.IsEnabled = $false
         $script:costAccessIssue = $null
         $script:currentStage = 0
+        $script:scanCancelled = $false
         $script:scanTimer.Start()
+    })
+
+# Cancel Scan Button
+$script:CancelScanButton.Add_Click({
+        $result = [System.Windows.MessageBox]::Show(
+            "Are you sure you want to cancel the scan?`n`nAny data already collected will be lost.",
+            'Cancel Scan',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question
+        )
+        if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
+            $script:scanCancelled = $true
+            $script:scanTimer.Stop()
+            $script:CancelScanButton.Visibility = 'Collapsed'
+            $script:ScanButton.Visibility = 'Visible'
+            $script:ScanButton.IsEnabled = $true
+            $script:ScanButton.Content = "Re-Scan"
+            $script:TenantButton.IsEnabled = $true
+            $script:GovTenantButton.IsEnabled = $true
+            $script:StatusText.Text = 'Scan cancelled.'
+            $script:ProgressBar.Value = 0
+        }
     })
 
 # Lock icon characters (surrogates for PS 5.1 compat)
