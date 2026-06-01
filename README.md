@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.3.1](https://img.shields.io/badge/Version-2.3.1-brightgreen)
+![Version 2.4.0](https://img.shields.io/badge/Version-2.4.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,11 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.4.0
+
+**New feature:**
+- **MACC consumption tracking** — the Billing tab now shows your Microsoft Azure Consumption Commitment (MACC) readout: commitment, consumed, remaining, % burned, and status for the current agreement period. Backed by a new `Get-MaccCommitment` module that queries the Consumption Lots API at billing-account scope and filters for consumption-commitment lots. Supports Enterprise Agreement (EA) and Microsoft Customer Agreement (MCA); gracefully reports when MACC is not applicable or not reachable.
 
 ### v2.3.1
 

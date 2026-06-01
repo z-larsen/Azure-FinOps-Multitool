@@ -286,7 +286,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.3.1'
+$script:AppVersion = '2.4.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -306,6 +306,7 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Deploy-ResourceTag.ps1')
 . (Join-Path $modulePath 'Get-BillingStructure.ps1')
 . (Join-Path $modulePath 'Get-CommitmentUtilization.ps1')
+. (Join-Path $modulePath 'Get-MaccCommitment.ps1')
 . (Join-Path $modulePath 'Get-OrphanedResources.ps1')
 . (Join-Path $modulePath 'Get-BudgetStatus.ps1')
 . (Join-Path $modulePath 'Get-AnomalyAlerts.ps1')
@@ -378,6 +379,7 @@ $controls = @(
     # Billing
     'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
+    'MaccSummary', 'MaccGrid',
     # Budgets Tab
     'BudgetSubSelector', 'BudgetSubSummary', 'BudgetDetailGrid',
     'BudgetHistoryGrid', 'BudgetHistoryStatus',
@@ -429,6 +431,7 @@ $script:scanData = @{
     TagRecs       = $null
     Billing       = $null
     Commitments   = $null
+    Macc          = $null
     Orphans       = $null
     Budgets       = $null
     Savings       = $null
@@ -2464,6 +2467,35 @@ $script:policyUnassignTargets = @()
 #-----------------------------------------------------------------------
 function Populate-BillingTab {
     $d = $script:scanData.Billing
+
+    # MACC Consumption Commitment (renders independently of billing-account access)
+    $macc = $script:scanData.Macc
+    if ($macc -and $macc.HasMacc -and $macc.Commitments.Count -gt 0) {
+        $maccRows = $macc.Commitments | ForEach-Object {
+            $sym = if ($_.Currency) { Get-CurrencySymbol -Code $_.Currency } else { '' }
+            [PSCustomObject]@{
+                'Commitment' = "$sym{0:N0} {1}" -f $_.Commitment, $_.Currency
+                'Consumed'   = "$sym{0:N0}" -f $_.Consumed
+                'Remaining'  = "$sym{0:N0}" -f $_.Remaining
+                '% Burned'   = "{0:N1}%" -f $_.PctUsed
+                'Status'     = $_.Status
+                'Period'     = if ($_.StartDate) { "$($_.StartDate) -> $($_.ExpirationDate)" } else { '' }
+            }
+        }
+        $script:MaccGrid.ItemsSource = @($maccRows)
+        $top = $macc.Commitments[0]
+        $script:MaccSummary.Text = "Commitment {0:N0} {1} | Consumed {2:N0} ({3:N1}%) | Remaining {4:N0} | Status: {5}" -f `
+            $top.Commitment, $top.Currency, $top.Consumed, $top.PctUsed, $top.Remaining, $top.Status
+    }
+    elseif ($macc -and -not $macc.Applicable) {
+        $script:MaccSummary.Text = $macc.Reason
+        $script:MaccGrid.ItemsSource = @([PSCustomObject]@{ Status = 'Not applicable for this agreement type.' })
+    }
+    else {
+        $reason = if ($macc -and $macc.Reason) { $macc.Reason } else { 'No MACC commitment found.' }
+        $script:MaccSummary.Text = $reason
+        $script:MaccGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No MACC commitment data available.' })
+    }
 
     if (-not $d -or -not $d.HasBillingAccess) {
         $agreementType = if ($script:scanData.Contract -and $script:scanData.Contract[0].AgreementType) { $script:scanData.Contract[0].AgreementType } else { '' }
@@ -4761,6 +4793,11 @@ $script:scanStages = @(
     @{ Label = 'Scanning commitment utilization...'; Pct = 68; Action = {
             $agreementType = if ($script:scanData.Contract -and $script:scanData.Contract[0].AgreementType) { $script:scanData.Contract[0].AgreementType } else { '' }
             $script:scanData.Commitments = Get-CommitmentUtilization -Subscriptions $script:scanData.Auth.Subscriptions -AgreementType $agreementType
+        }
+    }
+    @{ Label = 'Scanning MACC commitment...'; Pct = 69; Action = {
+            $agreementType = if ($script:scanData.Contract -and $script:scanData.Contract[0].AgreementType) { $script:scanData.Contract[0].AgreementType } else { '' }
+            $script:scanData.Macc = Get-MaccCommitment -Subscriptions $script:scanData.Auth.Subscriptions -AgreementType $agreementType
         }
     }
     @{ Label = 'Scanning orphaned resources...'; Pct = 70; Action = {
