@@ -114,10 +114,12 @@ function Get-CostByTag {
     }
 
     $results = @{}
-    # When the user picked a subset of subscriptions, skip MG scope (which
-    # covers the whole management group) so cost-by-tag totals only include
-    # the selected subscriptions via the per-subscription path.
-    $mgScopeId  = if ($RestrictToSelected) { $null } else { Resolve-CostMgId -TenantId $TenantId }
+    # When the user picked a subset of subscriptions we KEEP the fast MG-scope
+    # query but add a server-side SubscriptionId filter so cost-by-tag totals
+    # only include the selected subs - avoids the slow per-subscription fan-out
+    # that triggers 429 throttling.
+    $mgScopeId  = Resolve-CostMgId -TenantId $TenantId
+    $subFilter  = if ($RestrictToSelected) { Get-CostSubscriptionFilter -Subscriptions $Subscriptions } else { $null }
     $useMgScope = [bool]$mgScopeId
     $mgPath = "/providers/Microsoft.Management/managementGroups/$mgScopeId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
 
@@ -313,6 +315,7 @@ function Get-CostByTag {
         else {
             $bodyObj['timeframe'] = $tf
         }
+        if ($subFilter) { $bodyObj.dataset['filter'] = $subFilter }
         $body = $bodyObj | ConvertTo-Json -Depth 10
 
         if ($useMgScope) {
@@ -499,6 +502,7 @@ function Get-CostByTag {
                     else {
                         $bodyObj['timeframe'] = $tf
                     }
+                    if ($subFilter) { $bodyObj.dataset['filter'] = $subFilter }
                     $body = $bodyObj | ConvertTo-Json -Depth 10
 
                     $tagCosts = [System.Collections.Generic.List[PSCustomObject]]::new()

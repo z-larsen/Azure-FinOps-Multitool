@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.10.0](https://img.shields.io/badge/Version-2.10.0-brightgreen)
+![Version 2.11.0](https://img.shields.io/badge/Version-2.11.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,20 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.11.0
+
+**Changed — subset scans are fast again (no more 429 throttling):**
+- **Selecting a subset of subscriptions no longer drops to slow per-subscription queries.** Previously, picking fewer than all subscriptions forced every cost stage (cost data, resource costs, cost-by-tag, cost trend) into a per-subscription fan-out — one Cost Management API call per subscription per timeframe. On large tenants that hammered the per-tenant throttle and produced repeated 429/408 retries, making subset scans slower than full-tenant scans.
+- **The fix:** subset scans now keep the single fast management-group-scope query and add a server-side `SubscriptionId In (...)` filter to the Cost Management query/forecast bodies. Output is identical (only the selected subscriptions are returned), but the scan makes one MG-scope call instead of N per-subscription calls — eliminating the throttling storm. Per-subscription queries remain only as the fallback when no MG cost scope is accessible.
+
+**Fixed — Cost Export Scan now populates the cost tabs:**
+- **Export scans no longer finish "successfully" with empty Overview, Cost Analysis and Budgets tabs.** Root cause was twofold: (1) the export reader keyed cost rows by the raw `SubscriptionId` cell, but FOCUS exports store it as a full `/subscriptions/<guid>` path (and the UI looks up by bare GUID), so every row landed under a key the tabs never read; and (2) silent dead-ends — a missing cost column, zero data rows, or gzip-compressed (`.csv.gz`) export parts — returned empty with only a console warning, so the scan appeared to work.
+- **The fix:** subscription matching now normalizes any GUID form (bare, path, or mixed case) back to the selected subscription's key, and falls back to deriving the subscription from `ResourceId` when no subscription column exists. The reader now decompresses `.csv.gz` parts, and the scan surfaces a clear, actionable error (listing the columns it found) instead of silently rendering empty tabs when no recognized cost column or data is present.
+
+**Fixed — Tag coverage and Cost by Tag no longer break on other tenants:**
+- **Tag coverage no longer shows "0 tagged / 0 untagged" when tags clearly exist.** Some tenants return Resource Graph count queries in *table* format (`columns`/`rows`) rather than object rows, so the total/untagged counters parsed to 0 even though 21 tag keys were found. The count queries now force `resultFormat = objectArray`, parse results array-safely (PowerShell 5.1 returns `$null` — not 0 — for `.Count` on a single object), and, as a last resort, derive the total from the tagged + untagged populations so coverage is always meaningful.
+- **Cost by Tag no longer crashes with a raw `EndInvoke` error.** A transport-level request failure (dropped connection, TLS reset, token-acquisition hiccup) inside the REST runspace threw a terminating `ErrorActionPreference = Stop` exception that bubbled straight to the UI. The runspace now catches transport errors and returns a synthetic `503` so the affected stage degrades gracefully with guidance instead of throwing. This is why these symptoms appeared on one tenant but never on a fully-permissioned tenant that always received an HTTP response.
 
 ### v2.10.0
 

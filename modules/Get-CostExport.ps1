@@ -62,6 +62,36 @@ function Invoke-StorageBlobRest {
     }
 }
 
+# -- Decompress a gzip blob body into CSV text ----------------------------
+# Newer Cost Management exports can write '.csv.gz' parts. Invoke-RestMethod
+# hands these back as bytes (or a mojibake string); gunzip into UTF-8 text.
+function Expand-GzipText {
+    param($Content)
+    try {
+        $bytes = if ($Content -is [byte[]]) { $Content }
+        elseif ($Content -is [string]) { [System.Text.Encoding]::GetEncoding('ISO-8859-1').GetBytes($Content) }
+        else { return $null }
+        $inStream  = New-Object System.IO.MemoryStream(, $bytes)
+        $gzip      = New-Object System.IO.Compression.GZipStream($inStream, [System.IO.Compression.CompressionMode]::Decompress)
+        $reader    = New-Object System.IO.StreamReader($gzip, [System.Text.Encoding]::UTF8)
+        $text      = $reader.ReadToEnd()
+        $reader.Dispose(); $gzip.Dispose(); $inStream.Dispose()
+        return $text
+    }
+    catch {
+        Write-Warning "  Could not gunzip export part: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# -- Extract the first GUID from any string (bare or resource-path form) ---
+function Get-GuidFromString {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $m = [regex]::Match($Value, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+    if ($m.Success) { return $m.Value } else { return $null }
+}
+
 # -- Canonical export column resolver -------------------------------------
 # Cost Management exports vary in schema (classic ActualCost vs FOCUS). Map
 # the columns we need to whatever synonym the export actually used.
@@ -229,11 +259,14 @@ function Get-CostExportData {
         [void]$blobs.Add([PSCustomObject]@{ Name = $b.Name; LastModified = $lm })
     }
 
-    # CSV data files only; pick the newest run folder by last-modified
-    $csvBlobs = @($blobs | Where-Object { $_.Name -match '\.csv$' })
+    # CSV (optionally gzip-compressed) data files only; pick newest run folder
+    $csvBlobs = @($blobs | Where-Object { $_.Name -match '\.csv(\.gz)?$' })
     if ($csvBlobs.Count -eq 0) {
-        Write-Warning "  No CSV blobs found under $prefix."
-        return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD' }
+        $hasParquet = @($blobs | Where-Object { $_.Name -match '\.parquet$' }).Count -gt 0
+        $reason = if ($hasParquet) { 'Export writes Parquet, not CSV. Recreate the export with CSV format.' }
+        else { "No CSV data blobs found under '$prefix'." }
+        Write-Warning "  $reason"
+        return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; Unsupported = $hasParquet; Reason = $reason; NoData = $true }
     }
 
     $newest = ($csvBlobs | Sort-Object LastModified -Descending | Select-Object -First 1)
@@ -246,19 +279,26 @@ function Get-CostExportData {
     $dataDate = ($runParts | Sort-Object LastModified -Descending | Select-Object -First 1).LastModified
 
     # Download + parse each CSV part
-    $rows     = [System.Collections.Generic.List[object]]::new()
-    $colMap   = $null
+    $rows        = [System.Collections.Generic.List[object]]::new()
+    $colMap      = $null
+    $firstHeader = @()
     foreach ($part in $runParts) {
         $blobUri = "$blobBase/$container/$([uri]::EscapeUriString($part.Name))"
-        $csvText = Invoke-StorageBlobRest -Uri $blobUri -StorageToken $token
+        $raw = Invoke-StorageBlobRest -Uri $blobUri -StorageToken $token
+        if (-not $raw) { continue }
+        $csvText = $null
+        if ($part.Name -match '\.gz$') {
+            $csvText = Expand-GzipText -Content $raw
+        }
+        elseif ($raw -is [byte[]]) { $csvText = [System.Text.Encoding]::UTF8.GetString($raw) }
+        else { $csvText = $raw }
         if (-not $csvText) { continue }
-        if ($csvText -is [byte[]]) { $csvText = [System.Text.Encoding]::UTF8.GetString($csvText) }
 
         $parsed = @($csvText | ConvertFrom-Csv)
         if ($parsed.Count -eq 0) { continue }
         if (-not $colMap) {
-            $header = $parsed[0].PSObject.Properties.Name
-            $colMap = Resolve-ExportColumns -Header $header
+            $firstHeader = @($parsed[0].PSObject.Properties.Name)
+            $colMap = Resolve-ExportColumns -Header $firstHeader
         }
         foreach ($r in $parsed) { [void]$rows.Add($r) }
     }
@@ -271,11 +311,14 @@ function Get-CostExportData {
     }
 
     return [PSCustomObject]@{
-        Rows     = $rows
-        ColMap   = $colMap
-        DataDate = $dataDate
-        Currency = $currency
-        RowCount = $rows.Count
+        Rows         = $rows
+        ColMap       = $colMap
+        DataDate     = $dataDate
+        Currency     = $currency
+        RowCount     = $rows.Count
+        Headers      = $firstHeader
+        NoCostColumn = ($colMap -and -not $colMap.Cost)
+        NoData       = ($rows.Count -eq 0)
     }
 }
 
@@ -299,17 +342,29 @@ function ConvertTo-CostDataFromExport {
     $cm = $ExportData.ColMap
     if (-not $cm -or -not $cm.Cost) { return $costMap }
 
+    # Map selected-sub GUIDs (lowercased) back to their canonical sub.Id key
+    $guidToKey = @{}
+    foreach ($s in $Subscriptions) {
+        $g = Get-GuidFromString -Value "$($s.Id)"
+        if ($g) { $guidToKey[$g.ToLower()] = $s.Id }
+    }
+
     # Seed every selected sub so the UI shows them even at $0
     foreach ($s in $Subscriptions) { $costMap[$s.Id] = @{ Actual = 0; Forecast = 0; Currency = $ExportData.Currency } }
 
     foreach ($r in $ExportData.Rows) {
-        $subId = if ($cm.SubscriptionId) { "$($r.$($cm.SubscriptionId))".Trim() } else { $null }
-        if (-not $subId) { continue }
+        # SubscriptionId may be a bare GUID (classic) or a /subscriptions/<guid>
+        # path (FOCUS SubAccountId). Fall back to ResourceId when absent.
+        $rawSub = if ($cm.SubscriptionId) { "$($r.$($cm.SubscriptionId))" } else { '' }
+        if ([string]::IsNullOrWhiteSpace($rawSub) -and $cm.ResourceId) { $rawSub = "$($r.$($cm.ResourceId))" }
+        $g = Get-GuidFromString -Value $rawSub
+        if (-not $g) { continue }
+        $key = if ($guidToKey.ContainsKey($g.ToLower())) { $guidToKey[$g.ToLower()] } else { $g }
         $cost = 0.0; [double]::TryParse("$($r.$($cm.Cost))", [ref]$cost) | Out-Null
-        if (-not $costMap.ContainsKey($subId)) {
-            $costMap[$subId] = @{ Actual = 0; Forecast = 0; Currency = $ExportData.Currency }
+        if (-not $costMap.ContainsKey($key)) {
+            $costMap[$key] = @{ Actual = 0; Forecast = 0; Currency = $ExportData.Currency }
         }
-        $costMap[$subId].Actual += $cost
+        $costMap[$key].Actual += $cost
     }
 
     # Linear month-to-date projection for a sensible forecast
@@ -449,7 +504,7 @@ function ConvertTo-CostTrendFromExport {
         $agg[$key].Cost += $cost
 
         if ($cm.SubscriptionId) {
-            $subId = "$($r.$($cm.SubscriptionId))".Trim()
+            $subId = Get-GuidFromString -Value "$($r.$($cm.SubscriptionId))"
             if ($subId) {
                 if (-not $subAgg.ContainsKey($subId)) { $subAgg[$subId] = @{} }
                 if (-not $subAgg[$subId].ContainsKey($key)) { $subAgg[$subId][$key] = @{ Cost = 0.0; Date = $firstOfMo } }

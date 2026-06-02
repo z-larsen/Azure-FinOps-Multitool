@@ -38,11 +38,13 @@ function Get-CostData {
     }
 
     # Resolve the management-group scope we can actually query for cost.
-    # Falls back to per-subscription if no accessible MG returns cost data.
-    # When the user picked a subset of subscriptions, skip MG scope (which
-    # covers the whole management group) and use the per-subscription path so
-    # the scan honors exactly the selected subscriptions.
-    $mgScopeId = if ($RestrictToSelected) { $null } else { Resolve-CostMgId -TenantId $TenantId }
+    # Falls back to per-subscription only if no accessible MG returns cost data.
+    # When the user picked a subset of subscriptions we KEEP the single fast
+    # MG-scope query but add a server-side SubscriptionId filter so only the
+    # selected subs are returned - this avoids the slow per-subscription
+    # fan-out (N calls per timeframe) that triggers 429 throttling.
+    $mgScopeId = Resolve-CostMgId -TenantId $TenantId
+    $subFilter = if ($RestrictToSelected) { Get-CostSubscriptionFilter -Subscriptions $Subscriptions } else { $null }
     if (-not $mgScopeId) {
         Write-Host "  Querying actual costs (per-subscription)..." -ForegroundColor Cyan
         return Get-CostDataPerSubscription -Subscriptions $Subscriptions
@@ -51,18 +53,20 @@ function Get-CostData {
     # -- Actual Cost (Month-to-Date) ------------------------------------
     try {
         Write-Host "  Querying actual costs (MG scope)..." -ForegroundColor Cyan
+        $actualDataset = @{
+            granularity = 'None'
+            aggregation = @{
+                totalCost = @{ name = 'Cost'; function = 'Sum' }
+            }
+            grouping    = @(
+                @{ type = 'Dimension'; name = 'SubscriptionId' }
+            )
+        }
+        if ($subFilter) { $actualDataset['filter'] = $subFilter }
         $actualBody = @{
             type      = 'ActualCost'
             timeframe = 'MonthToDate'
-            dataset   = @{
-                granularity = 'None'
-                aggregation = @{
-                    totalCost = @{ name = 'Cost'; function = 'Sum' }
-                }
-                grouping    = @(
-                    @{ type = 'Dimension'; name = 'SubscriptionId' }
-                )
-            }
+            dataset   = $actualDataset
         } | ConvertTo-Json -Depth 10
 
         $mgPath = "/providers/Microsoft.Management/managementGroups/$mgScopeId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
@@ -124,15 +128,19 @@ function Get-CostData {
                 from = $now.ToString('yyyy-MM-dd')
                 to   = $monthEnd.ToString('yyyy-MM-dd')
             }
-            dataset                 = @{
-                granularity = 'None'
-                aggregation = @{
-                    totalCost = @{ name = 'Cost'; function = 'Sum' }
+            dataset                 = $(
+                $fcDataset = @{
+                    granularity = 'None'
+                    aggregation = @{
+                        totalCost = @{ name = 'Cost'; function = 'Sum' }
+                    }
+                    grouping    = @(
+                        @{ type = 'Dimension'; name = 'SubscriptionId' }
+                    )
                 }
-                grouping    = @(
-                    @{ type = 'Dimension'; name = 'SubscriptionId' }
-                )
-            }
+                if ($subFilter) { $fcDataset['filter'] = $subFilter }
+                $fcDataset
+            )
             includeActualCost       = $true
             includeFreshPartialCost = $false
         } | ConvertTo-Json -Depth 10

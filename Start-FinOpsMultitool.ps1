@@ -94,16 +94,31 @@ function Invoke-AzRestMethodWithRetry {
                 param($p, $m, $pl)
                 $params = @{ Path = $p; Method = $m; ErrorAction = 'Stop' }
                 if ($pl) { $params['Payload'] = $pl }
-                $r = Invoke-AzRestMethod @params
-                # Return a simple hashtable that survives runspace serialization
-                $hdrs = @{}
-                if ($r.Headers) {
-                    foreach ($k in $r.Headers.Keys) { $hdrs[$k] = $r.Headers[$k] }
+                try {
+                    $r = Invoke-AzRestMethod @params
+                    # Return a simple hashtable that survives runspace serialization
+                    $hdrs = @{}
+                    if ($r.Headers) {
+                        foreach ($k in $r.Headers.Keys) { $hdrs[$k] = $r.Headers[$k] }
+                    }
+                    [PSCustomObject]@{
+                        StatusCode = $r.StatusCode
+                        Content    = $r.Content
+                        Headers    = $hdrs
+                    }
                 }
-                [PSCustomObject]@{
-                    StatusCode = $r.StatusCode
-                    Content    = $r.Content
-                    Headers    = $hdrs
+                catch {
+                    # A transport-level failure ("An error occurred while sending
+                    # the request", TLS/socket drop, token-acquisition error) has
+                    # no HTTP status and would otherwise re-throw out of EndInvoke
+                    # as a raw ErrorActionPreference=Stop exception. Surface it as
+                    # a synthetic 503 so the caller degrades gracefully.
+                    $msg = "$($_.Exception.Message)" -replace '[\\"]', "'"
+                    [PSCustomObject]@{
+                        StatusCode = 503
+                        Content    = ('{"error":{"message":"' + $msg + '"}}')
+                        Headers    = @{}
+                    }
                 }
             }).AddArgument($Path).AddArgument($Method).AddArgument($Payload)
 
@@ -128,8 +143,16 @@ function Invoke-AzRestMethodWithRetry {
                 $resp = if ($raw -and $raw.Count -gt 0) { $raw[0] } else { $null }
             }
             catch {
+                # Should be rare now that the runspace script catches internally,
+                # but never let an EndInvoke failure bubble to the UI as a raw
+                # terminating error - degrade to a synthetic 503 instead.
                 $ps.Dispose()
-                throw
+                Write-Warning "  REST call failed in runspace: $($_.Exception.Message)"
+                return [PSCustomObject]@{
+                    StatusCode = 503
+                    Content    = '{"error":{"message":"Request failed (transport error)."}}'
+                    Headers    = @{}
+                }
             }
         }
         else {
@@ -331,6 +354,27 @@ function Resolve-CostMgId {
     return $null
 }
 
+# -- Shared Subscription-Scope Filter -------------------------------------
+# When the user picks a subset of subscriptions we still want the single fast
+# MG-scope cost query (one call covers the whole management group), but scoped
+# to only the selected subscriptions. The Cost Management Query API supports a
+# server-side dataset filter on the SubscriptionId dimension, so we build that
+# filter once and inject it into each cost query body. This avoids the slow
+# per-subscription fan-out (N calls per timeframe) that hammers the throttle.
+function Get-CostSubscriptionFilter {
+    param([object[]]$Subscriptions)
+    if (-not $Subscriptions -or $Subscriptions.Count -eq 0) { return $null }
+    $ids = @($Subscriptions | ForEach-Object { [string]$_.Id } | Where-Object { $_ })
+    if ($ids.Count -eq 0) { return $null }
+    return @{
+        dimensions = @{
+            name     = 'SubscriptionId'
+            operator = 'In'
+            values   = $ids
+        }
+    }
+}
+
 # -- Shared Cost-Access Circuit Breaker -----------------------------------
 # When the Cost Management API denies access (401/403) it is a tenant-wide
 # billing-policy restriction, not a per-subscription RBAC gap. Falling back
@@ -491,7 +535,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.10.0'
+$script:AppVersion = '2.11.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -4661,6 +4705,14 @@ $script:scanStages = @(
                 }
                 if ($script:ScanExportData.AccessDenied) {
                     throw "Access denied reading export blobs. You need 'Storage Blob Data Reader' on the export storage account."
+                }
+                if ($script:ScanExportData.NoData) {
+                    $why = if ($script:ScanExportData.Reason) { $script:ScanExportData.Reason } else { 'The export run folder contained no CSV data rows.' }
+                    throw "Export returned no cost data. $why Use Live Scan or pick an export with recent data."
+                }
+                if ($script:ScanExportData.NoCostColumn) {
+                    $cols = if ($script:ScanExportData.Headers) { ($script:ScanExportData.Headers -join ', ') } else { '(none)' }
+                    throw "Export read $($script:ScanExportData.RowCount) row(s) but no recognized cost column was found. Columns present: $cols"
                 }
                 $script:scanData.Costs = ConvertTo-CostDataFromExport -ExportData $script:ScanExportData -Subscriptions $script:scanData.Auth.Subscriptions
             }
