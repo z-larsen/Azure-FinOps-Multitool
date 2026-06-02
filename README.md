@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.5.0](https://img.shields.io/badge/Version-2.5.0-brightgreen)
+![Version 2.6.0](https://img.shields.io/badge/Version-2.6.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.6.0
+
+**Performance:**
+- **Single-call savings realized** — `Get-SavingsRealized` now groups its management-group ActualCost and AmortizedCost queries by `SubscriptionId`, so per-subscription reservation, savings-plan, and unused-reservation attribution comes back in two calls instead of looping two queries per subscription. The previous MG path collapsed everything into an "All (MG scope)" bucket; attribution is now preserved without the per-subscription fan-out.
+- **Single-subscription fast path** — when only one subscription is in scope, savings calculation queries the subscription scope directly and skips management-group resolution entirely, avoiding the throttle-prone MG candidate probing. The per-subscription loop is retained only as a fallback when MG-scope cost access is unavailable.
 
 ### v2.5.0
 
