@@ -123,6 +123,18 @@ resources
         Write-Warning "Total resource count failed: $($_.Exception.Message)"
     }
 
+    # Fallback: the REST count endpoint returns table-format results in some
+    # tenants (no objectArray rows), leaving the count at 0. Re-derive via the
+    # Resource Graph cmdlet path, which is reliable where the tag query works.
+    if ($totalCount -eq 0) {
+        try {
+            $tcResult = Search-AzGraphSafe -Query "resources | summarize TotalCount = count()" -Subscription $subIds -First 1
+            if ($tcResult -and $tcResult.Data -and $tcResult.Data.Count -gt 0) {
+                $totalCount = [int]$tcResult.Data[0].TotalCount
+            }
+        } catch { }
+    }
+
     # Fallback: derive counts from detail data if REST queries failed
     if ($untaggedCount -eq 0 -and $untaggedResources.Count -gt 0) {
         $untaggedCount = $untaggedResources.Count

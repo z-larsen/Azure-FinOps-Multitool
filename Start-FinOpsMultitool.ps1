@@ -491,7 +491,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.7.0'
+$script:AppVersion = '2.10.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -503,6 +503,7 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Get-ResourceCosts.ps1')
 . (Join-Path $modulePath 'Get-TagInventory.ps1')
 . (Join-Path $modulePath 'Get-CostByTag.ps1')
+. (Join-Path $modulePath 'Get-CostExport.ps1')
 . (Join-Path $modulePath 'Get-AHBOpportunities.ps1')
 . (Join-Path $modulePath 'Get-ReservationAdvice.ps1')
 . (Join-Path $modulePath 'Get-OptimizationAdvice.ps1')
@@ -521,10 +522,11 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Deploy-PolicyAssignment.ps1')
 . (Join-Path $modulePath 'Get-StorageTierAdvice.ps1')
 . (Join-Path $modulePath 'Get-IdleVMs.ps1')
+. (Join-Path $modulePath 'New-PowerBITemplate.ps1')
 
 # -- Load XAML ----------------------------------------------------------
 $xamlPath = Join-Path $PSScriptRoot 'gui\MainWindow.xaml'
-$xamlContent = Get-Content $xamlPath -Raw
+$xamlContent = Get-Content $xamlPath -Raw -Encoding UTF8
 
 # Remove x:Name -> Name for FindName compatibility
 $xamlContent = $xamlContent -replace 'x:Name=', 'Name='
@@ -544,7 +546,7 @@ if (Test-Path $icoPath) {
 
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
-    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'CancelScanButton', 'ExportButton',
+    'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportScanButton', 'CancelScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText',
@@ -581,6 +583,8 @@ $controls = @(
     # Resources Tab
     'ResourcesPanel', 'ResourcesFinOpsPanel', 'ResourcesCostPanel',
     'ResourcesRatePanel', 'ResourcesGovernancePanel', 'ResourcesToolsPanel',
+    # Export Setup
+    'ExportSetupPanel', 'ExportSetupLinksPanel',
     # Billing
     'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
@@ -3294,6 +3298,56 @@ function Populate-ResourcesTab {
 }
 
 #-----------------------------------------------------------------------
+# EXPORT SETUP TAB
+#-----------------------------------------------------------------------
+function Populate-ExportSetupTab {
+    if (-not $script:ExportSetupLinksPanel) { return }
+
+    # Local helper: clickable hyperlink + description block
+    function New-SetupLinkBlock {
+        param([string]$Text, [string]$Url, [string]$Description)
+        $panel = [System.Windows.Controls.StackPanel]::new()
+        $panel.Margin = [System.Windows.Thickness]::new(0, 2, 0, 6)
+
+        $link = [System.Windows.Documents.Hyperlink]::new()
+        $link.Inlines.Add($Text)
+        $link.NavigateUri = [Uri]::new($Url)
+        $link.Add_RequestNavigate({ Start-Process $_.Uri.AbsoluteUri })
+
+        $tb = [System.Windows.Controls.TextBlock]::new()
+        $tb.FontSize = 13
+        $tb.Inlines.Add($link)
+        $panel.Children.Add($tb) | Out-Null
+
+        if ($Description) {
+            $desc = [System.Windows.Controls.TextBlock]::new()
+            $desc.Text = $Description
+            $desc.FontSize = 11
+            $desc.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#666')
+            $desc.TextWrapping = [System.Windows.TextWrapping]::Wrap
+            $desc.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+            $panel.Children.Add($desc) | Out-Null
+        }
+        $panel
+    }
+
+    $script:ExportSetupLinksPanel.Children.Clear()
+    $links = @(
+        , @('Create and manage Cost Management exports (tutorial)', 'https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-improved-exports', 'Step-by-step: create exports, file partitioning, run history, and storage behind a firewall.')
+        , @('Export prerequisites & permissions', 'https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-improved-exports#prerequisites', 'Owner / Contributor / Reader scope rules plus the storage-account permissions for firewalled accounts.')
+        , @('Configure exports for storage behind a firewall', 'https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-improved-exports#configure-exports-for-storage-accounts-with-a-firewall', 'Allow trusted Azure services, managed identity Storage Blob Data Contributor, and copy-scope settings.')
+        , @('Export cost data with a Storage SAS key (cross-tenant / partner)', 'https://learn.microsoft.com/azure/cost-management-billing/costs/export-cost-data-storage-account-sas-key', 'Use a SAS token when exporting to storage in a different tenant (no firewall).')
+        , @('Trusted access based on a managed identity', 'https://learn.microsoft.com/azure/storage/common/storage-network-security-trusted-azure-services#trusted-access-based-on-a-managed-identity', 'How trusted-service access works for firewalled storage accounts.')
+        , @('Storage Blob Data Reader role', 'https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage#storage-blob-data-reader', 'The data-plane role this tool needs to read export blobs.')
+        , @('Create exports with the Azure CLI', 'https://learn.microsoft.com/azure/cost-management-billing/automate/get-usage-data-azure-cli#configure-an-export-job-to-export-cost-data-to-azure-storage', 'az costmanagement export create reference and examples.')
+        , @('FOCUS dataset (FinOps Open Cost & Usage Spec)', 'https://learn.microsoft.com/azure/cost-management-billing/dataset-schema/cost-usage-details-focus', 'The FOCUS export schema this tool also reads.')
+    )
+    foreach ($item in $links) {
+        $script:ExportSetupLinksPanel.Children.Add((New-SetupLinkBlock -Text $item[0] -Url $item[1] -Description $item[2])) | Out-Null
+    }
+}
+
+#-----------------------------------------------------------------------
 # BUDGETS TAB
 #-----------------------------------------------------------------------
 function Populate-BudgetsTab {
@@ -3922,9 +3976,13 @@ function Show-SubscriptionSelector {
     $selectNoneBtn.Add_Click({ foreach ($c in $checkboxes) { $c.IsChecked = $false } }.GetNewClosure())
 
     # OK / Cancel
-    $script:_subSelectorResult = $null
+    # Use a captured hashtable, not $script:. Writing $script: inside a
+    # .GetNewClosure() handler targets the closure's own module scope, so
+    # the selection would be lost and the function would fall through to
+    # "return all subscriptions" (silently ignoring a subset choice).
+    $selResult = @{ Subs = $null }
     $okBtn.Add_Click({
-            $script:_subSelectorResult = @($checkboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
+            $selResult.Subs = @($checkboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
             $dlgWin.Close()
         }.GetNewClosure())
     $cancelBtn.Add_Click({ $dlgWin.Close() }.GetNewClosure())
@@ -3932,9 +3990,9 @@ function Show-SubscriptionSelector {
     [void]$dlgWin.ShowDialog()
 
     # If user cancelled or closed, return all subs (don't block scan)
-    if ($null -eq $script:_subSelectorResult) { return $Subscriptions }
-    if ($script:_subSelectorResult.Count -eq 0) { return $Subscriptions }
-    return $script:_subSelectorResult
+    if ($null -eq $selResult.Subs) { return $Subscriptions }
+    if ($selResult.Subs.Count -eq 0) { return $Subscriptions }
+    return $selResult.Subs
 }
 
 # -- Export Format Chooser Dialog ----------------------------------------
@@ -4046,410 +4104,30 @@ function Export-PowerBIData {
 
     $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
     $exportDir = Join-Path $fbd.SelectedPath "FinOps-PowerBI-$stamp"
-    New-Item -Path $exportDir -ItemType Directory -Force | Out-Null
 
-    $fileCount = 0
-
-    # Helper: safe CSV export
-    $writeCsv = {
-        param([string]$Name, [object[]]$Rows)
-        if ($Rows -and $Rows.Count -gt 0) {
-            $Rows | Export-Csv -Path (Join-Path $exportDir "$Name.csv") -NoTypeInformation -Encoding UTF8
-            $script:fileCount++
-        }
-    }
-
-    # 1. Subscription Costs
-    $subRows = @()
-    foreach ($sub in $d.Auth.Subscriptions) {
-        $c = if ($d.Costs -and $d.Costs.ContainsKey($sub.Id)) { $d.Costs[$sub.Id] } else { @{ Actual = 0; Forecast = 0; Currency = 'USD' } }
-        $subRows += [PSCustomObject]@{
-            Subscription   = $sub.Name
-            SubscriptionId = $sub.Id
-            ActualMTD      = [math]::Round($c.Actual, 2)
-            Forecast       = [math]::Round($c.Forecast, 2)
-            Currency       = $c.Currency
-        }
-    }
-    & $writeCsv 'SubscriptionCosts' $subRows
-
-    # 2. Resource Costs
-    if ($d.ResourceCosts -and $d.ResourceCosts.Count -gt 0) {
-        $rcRows = $d.ResourceCosts | ForEach-Object {
-            [PSCustomObject]@{
-                Subscription  = $_.Subscription
-                ResourceGroup = $_.ResourceGroup
-                ResourceType  = $_.ResourceType
-                ResourcePath  = $_.ResourcePath
-                ActualMTD     = [math]::Round($_.Actual, 2)
-                Forecast      = [math]::Round($_.Forecast, 2)
-                Currency      = $_.Currency
-            }
-        }
-        & $writeCsv 'ResourceCosts' $rcRows
-    }
-
-    # 3. Tag Inventory
-    if ($d.Tags -and $d.Tags.TagNames) {
-        $tagRows = @()
-        foreach ($tn in $d.Tags.TagNames.Keys) {
-            $info = $d.Tags.TagNames[$tn]
-            foreach ($v in $info.Values) {
-                $tagRows += [PSCustomObject]@{
-                    TagName       = $tn
-                    TagValue      = $v.Value
-                    ResourceCount = $v.ResourceCount
-                }
-            }
-        }
-        & $writeCsv 'TagInventory' $tagRows
-    }
-
-    # 4. Tag Recommendations
-    if ($d.TagRecs -and $d.TagRecs.Analysis) {
-        $trRows = $d.TagRecs.Analysis | ForEach-Object {
-            [PSCustomObject]@{
-                TagName  = $_.TagName
-                Status   = $_.Status
-                Priority = $_.Priority
-                Pillar   = $_.Pillar
-                Purpose  = $_.Purpose
-            }
-        }
-        & $writeCsv 'TagRecommendations' $trRows
-    }
-
-    # 5. Policy Inventory
-    if ($d.PolicyInv -and $d.PolicyInv.Assignments) {
-        $piRows = $d.PolicyInv.Assignments | ForEach-Object {
-            [PSCustomObject]@{
-                AssignmentName  = $_.AssignmentName
-                PolicyDefId     = $_.PolicyDefId
-                Scope           = $_.Scope
-                Effect          = $_.Effect
-                EnforcementMode = $_.EnforcementMode
-                Origin          = $_.Origin
-                Subscription    = $_.Subscription
-            }
-        }
-        & $writeCsv 'PolicyInventory' $piRows
-    }
-
-    # 6. Policy Recommendations
-    if ($d.PolicyRecs -and $d.PolicyRecs.Analysis) {
-        $prRows = $d.PolicyRecs.Analysis | ForEach-Object {
-            [PSCustomObject]@{
-                DisplayName   = $_.DisplayName
-                Category      = $_.Category
-                Pillar        = $_.Pillar
-                Priority      = $_.Priority
-                DefaultEffect = $_.DefaultEffect
-                Purpose       = $_.Purpose
-                Status        = if ($_.PolicyDefId -in ($d.PolicyInv.Assignments.PolicyDefId)) { 'Assigned' } else { 'Missing' }
-            }
-        }
-        & $writeCsv 'PolicyRecommendations' $prRows
-    }
-
-    # 7. Budgets
-    if ($d.Budgets -and $d.Budgets.Budgets) {
-        $bRows = $d.Budgets.Budgets | ForEach-Object {
-            [PSCustomObject]@{
-                Subscription   = $_.Subscription
-                SubscriptionId = $_.SubscriptionId
-                BudgetName     = $_.BudgetName
-                Amount         = $_.Amount
-                TimeGrain      = $_.TimeGrain
-                ActualSpend    = [math]::Round($_.ActualSpend, 2)
-                Forecast       = [math]::Round($_.Forecast, 2)
-                PercentUsed    = [math]::Round($_.PctUsed, 1)
-                Risk           = $_.Risk
-                Currency       = $_.Currency
-            }
-        }
-        & $writeCsv 'Budgets' $bRows
-    }
-
-    # 8. Orphaned Resources
-    if ($d.Orphans -and $d.Orphans.Orphans) {
-        $oRows = $d.Orphans.Orphans | ForEach-Object {
-            [PSCustomObject]@{
-                Category       = $_.Category
-                ResourceName   = $_.ResourceName
-                ResourceGroup  = $_.ResourceGroup
-                SubscriptionId = $_.SubscriptionId
-                Location       = $_.Location
-                Detail         = $_.Detail
-                Impact         = $_.Impact
-            }
-        }
-        & $writeCsv 'OrphanedResources' $oRows
-    }
-
-    # 9. Cost by Tag
-    if ($d.CostByTag -and $d.CostByTag.CostByTag) {
-        $ctRows = @()
-        foreach ($tagKey in $d.CostByTag.CostByTag.Keys) {
-            foreach ($entry in $d.CostByTag.CostByTag[$tagKey]) {
-                $ctRows += [PSCustomObject]@{
-                    TagName  = $tagKey
-                    TagValue = $entry.TagValue
-                    Cost     = [math]::Round($entry.Cost, 2)
-                    Currency = $entry.Currency
-                }
-            }
-        }
-        & $writeCsv 'CostByTag' $ctRows
-    }
-
-    # 10. Cost Trend
-    if ($d.CostTrend -and $d.CostTrend.HasData -and $d.CostTrend.Months) {
-        $tRows = $d.CostTrend.Months | ForEach-Object {
-            [PSCustomObject]@{
-                Month    = $_.Month
-                Cost     = [math]::Round($_.Cost, 2)
-                Currency = $_.Currency
-            }
-        }
-        & $writeCsv 'CostTrend' $tRows
-    }
-
-    # 11. Commitment Utilization
-    if ($d.Commitments -and $d.Commitments.HasData) {
-        $cmRows = @()
-        if ($d.Commitments.Reservations) {
-            $cmRows += $d.Commitments.Reservations | ForEach-Object {
-                [PSCustomObject]@{
-                    Type           = 'Reservation'
-                    Id             = $_.ReservationId
-                    SkuName        = $_.SkuName
-                    AvgUtilization = [math]::Round($_.AvgUtilization, 1)
-                    MinUtilization = [math]::Round($_.MinUtilization, 1)
-                    MaxUtilization = [math]::Round($_.MaxUtilization, 1)
-                    ReservedHours  = $_.ReservedHours
-                    UsedHours      = $_.UsedHours
-                }
-            }
-        }
-        if ($d.Commitments.SavingsPlans) {
-            $cmRows += $d.Commitments.SavingsPlans | ForEach-Object {
-                [PSCustomObject]@{
-                    Type           = 'SavingsPlan'
-                    Id             = $_.BenefitId
-                    SkuName        = ''
-                    AvgUtilization = [math]::Round($_.AvgUtilization, 1)
-                    MinUtilization = 0
-                    MaxUtilization = 0
-                    ReservedHours  = 0
-                    UsedHours      = 0
-                }
-            }
-        }
-        & $writeCsv 'CommitmentUtilization' $cmRows
-    }
-
-    # 12. AHB Opportunities
-    if ($d.AHB -and $d.AHB.TotalOpportunities -gt 0) {
-        $ahbRows = @()
-        foreach ($prop in @('WindowsVMs', 'SQLVMs', 'SQLDatabases')) {
-            if ($d.AHB.$prop) {
-                $ahbRows += $d.AHB.$prop | ForEach-Object {
-                    [PSCustomObject]@{
-                        Category       = $prop
-                        ResourceName   = $_.name
-                        ResourceGroup  = $_.resourceGroup
-                        SubscriptionId = $_.subscriptionId
-                        Location       = $_.location
-                    }
-                }
-            }
-        }
-        & $writeCsv 'AHBOpportunities' $ahbRows
-    }
-
-    # 13. Optimization / Advisor Recommendations
-    if ($d.Optimization -and $d.Optimization.Recommendations) {
-        $optRows = $d.Optimization.Recommendations | ForEach-Object {
-            [PSCustomObject]@{
-                Subscription  = $_.Subscription
-                Category      = $_.Category
-                Impact        = $_.Impact
-                Problem       = $_.Problem
-                Solution      = $_.Solution
-                ResourceType  = $_.ResourceType
-                ResourceName  = $_.ResourceName
-                AnnualSavings = if ($_.AnnualSavings) { [math]::Round($_.AnnualSavings, 2) } else { '' }
-                Currency      = $_.Currency
-            }
-        }
-        & $writeCsv 'OptimizationAdvice' $optRows
-    }
-
-    # 14. Reservation Recommendations
-    if ($d.Reservations) {
-        $resRows = @()
-        if ($d.Reservations.AdvisorRecommendations) {
-            $resRows += $d.Reservations.AdvisorRecommendations | ForEach-Object {
-                [PSCustomObject]@{
-                    Source        = 'Advisor'
-                    Subscription  = $_.Subscription
-                    ResourceType  = $_.ResourceType
-                    Impact        = $_.Impact
-                    Problem       = $_.Problem
-                    AnnualSavings = if ($_.AnnualSavings) { [math]::Round($_.AnnualSavings, 2) } else { '' }
-                    Term          = $_.Term
-                    Currency      = $_.Currency
-                }
-            }
-        }
-        if ($d.Reservations.ReservationRecommendations) {
-            $resRows += $d.Reservations.ReservationRecommendations | ForEach-Object {
-                [PSCustomObject]@{
-                    Source        = 'ReservationAPI'
-                    Subscription  = ''
-                    ResourceType  = $_.ResourceType
-                    Impact        = ''
-                    Problem       = "Buy $($_.RecommendedQty)x $($_.SKU) ($($_.Term))"
-                    AnnualSavings = if ($_.NetSavings) { [math]::Round($_.NetSavings, 2) } else { '' }
-                    Term          = $_.Term
-                    Currency      = ''
-                }
-            }
-        }
-        & $writeCsv 'ReservationAdvice' $resRows
-    }
-
-    # 15. Savings Realized
-    if ($d.Savings -and $d.Savings.HasData -and $d.Savings.Details) {
-        $sRows = $d.Savings.Details | ForEach-Object {
-            [PSCustomObject]@{
-                Subscription = $_.Subscription
-                Category     = $_.Category
-                Amount       = [math]::Round($_.Amount, 2)
-                Type         = $_.Type
-            }
-        }
-        & $writeCsv 'SavingsRealized' $sRows
-    }
-
-    # 16. Scorecard (pre-computed)
-    if ($script:ScorecardGrid.ItemsSource) {
-        & $writeCsv 'Scorecard' @($script:ScorecardGrid.ItemsSource)
-    }
-
-    # ================================================================
-    # Generate Power BI Template (.pbit)
-    # ================================================================
-    Add-Type -AssemblyName System.IO.Compression
-
-    $csvFiles = Get-ChildItem -Path $exportDir -Filter '*.csv'
-    $numericCols = @('ActualMTD', 'Forecast', 'Cost', 'Amount', 'ActualSpend', 'PercentUsed', 'AnnualSavings', 'AvgUtilization', 'MinUtilization', 'MaxUtilization', 'ReservedHours', 'UsedHours', 'ResourceCount')
-    $exportDirEscaped = $exportDir -replace '\\', '\\\\'
-
-    # Build DataModelSchema JSON manually to avoid ConvertTo-Json issues
-    $sb = [System.Text.StringBuilder]::new(8192)
-    [void]$sb.Append('{"name":"Model","compatibilityLevel":1550,"model":{"culture":"en-US","dataAccessOptions":{"legacyRedirects":true,"returnErrorValuesAsNull":true},"defaultPowerBIDataSourceVersion":"powerBI_V3","sourceQueryCulture":"en-US","tables":[')
-
-    # CsvFolderPath parameter table
-    $paramGuid = [guid]::NewGuid().ToString()
-    $paramColGuid = [guid]::NewGuid().ToString()
-    [void]$sb.Append('{"name":"CsvFolderPath","lineageTag":"' + $paramGuid + '","columns":[{"name":"CsvFolderPath","dataType":"string","isHidden":true,"sourceColumn":"CsvFolderPath","lineageTag":"' + $paramColGuid + '"}],"partitions":[{"name":"CsvFolderPath","mode":"import","source":{"type":"m","expression":["\"' + $exportDirEscaped + '\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]"]}}],"annotations":[{"name":"PBI_ResultType","value":"Text"},{"name":"PBI_NavigationStepName","value":"Navigation"}]}')
-
-    # Data tables from CSVs
-    foreach ($csv in $csvFiles) {
-        $tblName = [System.IO.Path]::GetFileNameWithoutExtension($csv.Name)
-        $headerLine = Get-Content $csv.FullName -First 1
-        $headers = ($headerLine -replace '"', '') -split ','
-        $tblGuid = [guid]::NewGuid().ToString()
-
-        [void]$sb.Append(',{"name":"' + $tblName + '","lineageTag":"' + $tblGuid + '","columns":[')
-        $colFragments = @()
-        $typeCasts = @()
-        foreach ($h in $headers) {
-            $cGuid = [guid]::NewGuid().ToString()
-            $isNum = $h -in $numericCols
-            $dt = if ($isNum) { 'double' } else { 'string' }
-            $sum = if ($isNum) { 'sum' } else { 'none' }
-            $colFragments += '{"name":"' + $h + '","dataType":"' + $dt + '","sourceColumn":"' + $h + '","summarizeBy":"' + $sum + '","lineageTag":"' + $cGuid + '"}'
-            if ($isNum) { $typeCasts += '{\"' + $h + '\", type number}' }
-        }
-        [void]$sb.Append($colFragments -join ',')
-        [void]$sb.Append('],')
-
-        # Partition with M expression
-        $mExpr = @()
-        $mExpr += '"let"'
-        if ($typeCasts.Count -gt 0) {
-            $mExpr += '"    Source = Csv.Document(File.Contents(CsvFolderPath & \"\\\\' + $tblName + '.csv\"), [Delimiter=\",\", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),"'
-            $mExpr += '"    Headers = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),"'
-            $castStr = $typeCasts -join ', '
-            $mExpr += '"    Typed = Table.TransformColumnTypes(Headers, {' + $castStr + '})"'
-            $mExpr += '"in"'
-            $mExpr += '"    Typed"'
-        }
-        else {
-            $mExpr += '"    Source = Csv.Document(File.Contents(CsvFolderPath & \"\\\\' + $tblName + '.csv\"), [Delimiter=\",\", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),"'
-            $mExpr += '"    Headers = Table.PromoteHeaders(Source, [PromoteAllScalars=true])"'
-            $mExpr += '"in"'
-            $mExpr += '"    Headers"'
-        }
-
-        [void]$sb.Append('"partitions":[{"name":"' + $tblName + '","mode":"import","source":{"type":"m","expression":[' + ($mExpr -join ',') + ']}}]}')
-    }
-
-    [void]$sb.Append('],') # end tables
-
-    # Relationships
-    $tblNames = @('CsvFolderPath') + @($csvFiles | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) })
-    $relFragments = @()
-    $subIdTables = @('Budgets', 'OrphanedResources', 'AHBOpportunities')
-    foreach ($ft in $subIdTables) {
-        if ($ft -in $tblNames -and 'SubscriptionCosts' -in $tblNames) {
-            $rGuid = [guid]::NewGuid().ToString()
-            $relFragments += '{"name":"' + $rGuid + '","fromTable":"' + $ft + '","fromColumn":"SubscriptionId","toTable":"SubscriptionCosts","toColumn":"SubscriptionId"}'
-        }
-    }
-    [void]$sb.Append('"relationships":[' + ($relFragments -join ',') + '],')
-    [void]$sb.Append('"annotations":[{"name":"PBI_QueryGroup","value":"{}"},{"name":"PBIDesktopVersion","value":"2.138.0.0"}]}}')
-
-    $modelJson = $sb.ToString()
-
-    # Clone skeleton .pbit and inject our DataModelSchema
+    # Resolve skeleton.pbit next to this script
     $rootDir = $script:ScriptRootDir
     if (-not $rootDir) { $rootDir = $PSScriptRoot }
-    if (-not $rootDir) { $rootDir = Split-Path -Parent $MyInvocation.ScriptName }
-    if (-not $rootDir) { $rootDir = Split-Path -Parent (Get-Item $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue).FullName }
     $skelPath = Join-Path (Join-Path $rootDir 'gui') 'skeleton.pbit'
-    if (-not (Test-Path $skelPath)) {
-        [System.Windows.MessageBox]::Show("skeleton.pbit not found at:`n$skelPath`n`nScriptRootDir=$($script:ScriptRootDir)`nPSScriptRoot=$PSScriptRoot", 'Power BI Export Error', 'OK', 'Error')
-        return
-    }
-    $pbitPath = Join-Path $exportDir 'FinOps-Report.pbit'
-    Copy-Item $skelPath $pbitPath -Force
-    if ((Get-Item $pbitPath).Length -lt 1000) {
-        [System.Windows.MessageBox]::Show("skeleton.pbit copy failed — file too small.`nSource: $skelPath`nDest: $pbitPath", 'Power BI Export Error', 'OK', 'Error')
-        return
-    }
 
-    $unicodeNoBom = [System.Text.UnicodeEncoding]::new($false, $false)
-    $zip = [System.IO.Compression.ZipFile]::Open($pbitPath, [System.IO.Compression.ZipArchiveMode]::Update)
+    # Pre-computed scorecard rows are GUI-only — pass them through
+    $scorecardRows = if ($script:ScorecardGrid -and $script:ScorecardGrid.ItemsSource) {
+        @($script:ScorecardGrid.ItemsSource)
+    }
+    else { @() }
+
+    # All CSV writing + .pbit assembly lives in the shared, GUI-free
+    # New-PowerBITemplate module (also used by the MCP server).
     try {
-        $dmEntry = $zip.Entries | Where-Object { $_.FullName -eq 'DataModelSchema' }
-        if (-not $dmEntry) { throw 'DataModelSchema entry not found in skeleton' }
-        $dmName = $dmEntry.FullName
-        $dmEntry.Delete()
-        $newDm = $zip.CreateEntry($dmName)
-        $sw = [System.IO.StreamWriter]::new($newDm.Open(), $unicodeNoBom)
-        $sw.Write($modelJson)
-        $sw.Close()
+        $built = New-PowerBITemplate -ScanData $d -OutputDir $exportDir -SkeletonPath $skelPath -ScorecardRows $scorecardRows
     }
-    finally {
-        $zip.Dispose()
+    catch {
+        [System.Windows.MessageBox]::Show("Power BI export failed:`n$($_.Exception.Message)", 'Power BI Export Error', 'OK', 'Error')
+        return
     }
 
-    $csvCount = $csvFiles.Count
-    Update-UIStatus "Power BI export: $csvCount CSVs + template saved to $exportDir" $script:ProgressBar.Value
-    [System.Windows.MessageBox]::Show("Exported $csvCount CSVs + Power BI template to:`n$exportDir`n`nOpen FinOps-Report.pbit in Power BI Desktop.`nThe CsvFolderPath parameter is pre-set to this folder.", 'Power BI Export', 'OK', 'Information')
+    Update-UIStatus "Power BI export: $($built.CsvCount) CSVs + template saved to $($built.OutputDir)" $script:ProgressBar.Value
+    [System.Windows.MessageBox]::Show("Exported $($built.CsvCount) CSVs + Power BI template to:`n$($built.OutputDir)`n`nOpen FinOps-Report.pbit in Power BI Desktop.`nThe CsvFolderPath parameter is pre-set to this folder.", 'Power BI Export', 'OK', 'Information')
 }
 
 # -- Export Function ----------------------------------------------------
@@ -4975,11 +4653,29 @@ $script:scanStages = @(
         }
     }
     @{ Label = 'Querying cost data...'; Pct = 30; Action = {
-            $script:scanData.Costs = Get-CostData -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
+            if ($script:ScanMode -eq 'Export') {
+                $script:StatusText.Text = "Reading cost export '$($script:ScanExport.Name)'..."
+                $script:ScanExportData = Get-CostExportData -Export $script:ScanExport -Environment $script:scanData.Auth.Environment
+                if ($script:ScanExportData.Unsupported) {
+                    throw "Export format not readable: $($script:ScanExportData.Reason). Use Live Scan or create a CSV export."
+                }
+                if ($script:ScanExportData.AccessDenied) {
+                    throw "Access denied reading export blobs. You need 'Storage Blob Data Reader' on the export storage account."
+                }
+                $script:scanData.Costs = ConvertTo-CostDataFromExport -ExportData $script:ScanExportData -Subscriptions $script:scanData.Auth.Subscriptions
+            }
+            else {
+                $script:scanData.Costs = Get-CostData -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
+            }
         }
     }
     @{ Label = 'Querying resource-level costs...'; Pct = 40; Action = {
-            $script:scanData.ResourceCosts = Get-ResourceCosts -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -CostData $script:scanData.Costs
+            if ($script:ScanMode -eq 'Export') {
+                $script:scanData.ResourceCosts = ConvertTo-ResourceCostsFromExport -ExportData $script:ScanExportData -Subscriptions $script:scanData.Auth.Subscriptions
+            }
+            else {
+                $script:scanData.ResourceCosts = Get-ResourceCosts -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -CostData $script:scanData.Costs -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
+            }
         }
     }
     @{ Label = 'Scanning tag inventory...'; Pct = 50; Action = {
@@ -4988,11 +4684,21 @@ $script:scanStages = @(
     }
     @{ Label = 'Querying cost by tag...'; Pct = 55; Action = {
             $tagNames = if ($script:scanData.Tags) { $script:scanData.Tags.TagNames } else { @{} }
-            $script:scanData.CostByTag = Get-CostByTag -TenantId $script:scanData.Auth.TenantId -ExistingTags $tagNames -Subscriptions $script:scanData.Auth.Subscriptions
+            if ($script:ScanMode -eq 'Export') {
+                $script:scanData.CostByTag = ConvertTo-CostByTagFromExport -ExportData $script:ScanExportData -ExistingTags $tagNames
+            }
+            else {
+                $script:scanData.CostByTag = Get-CostByTag -TenantId $script:scanData.Auth.TenantId -ExistingTags $tagNames -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
+            }
         }
     }
     @{ Label = 'Querying 6-month cost trend...'; Pct = 60; Action = {
-            $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions
+            if ($script:ScanMode -eq 'Export') {
+                $script:scanData.CostTrend = ConvertTo-CostTrendFromExport -ExportData $script:ScanExportData
+            }
+            else {
+                $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
+            }
         }
     }
     @{ Label = 'Scanning AHB opportunities...'; Pct = 64; Action = {
@@ -5091,6 +4797,11 @@ $script:scanStages = @(
 )
 
 $script:currentStage = 0
+$script:ScanMode = 'Live'      # 'Live' = query API; 'Export' = read a Cost Management export
+$script:ScanExport = $null     # selected export descriptor when ScanMode = 'Export'
+$script:ScanExportData = $null # parsed export rows + column map (loaded once per export scan)
+$script:ExportArmed = $false   # true once an export is selected and the button is armed to scan
+$script:ArmedExport = $null    # the export descriptor armed for scanning
 $script:scanTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:scanTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 
@@ -5101,6 +4812,7 @@ $script:scanTimer.Add_Tick({
             $script:CancelScanButton.Visibility = 'Collapsed'
             $script:ScanButton.Visibility = 'Visible'
             $script:ScanButton.IsEnabled = $true
+            $script:ExportScanButton.IsEnabled = $true
             $script:TenantButton.IsEnabled = $true
             $script:GovTenantButton.IsEnabled = $true
             $script:ScanButton.Content = "Re-Scan"
@@ -5129,6 +4841,7 @@ $script:scanTimer.Add_Tick({
                 $script:CancelScanButton.Visibility = 'Collapsed'
                 $script:ScanButton.Visibility = 'Visible'
                 $script:ScanButton.IsEnabled = $true
+                $script:ExportScanButton.IsEnabled = $true
                 $script:TenantButton.IsEnabled = $true
                 $script:GovTenantButton.IsEnabled = $true
                 $script:ScanButton.Content = "Retry Scan"
@@ -5147,11 +4860,17 @@ $script:scanTimer.Add_Tick({
 
 # Scan Button
 $script:ScanButton.Add_Click({
+        $script:ScanMode = 'Live'
+        # Clear any armed export so the green button resets to its default state
+        $script:ExportArmed = $false
+        $script:ArmedExport = $null
+        $script:ExportScanButton.Content = 'Cost Export Scan'
         $script:ScanButton.IsEnabled = $false
         $script:ScanButton.Visibility = 'Collapsed'
         $script:CancelScanButton.Visibility = 'Visible'
         $script:TenantButton.IsEnabled = $false
         $script:GovTenantButton.IsEnabled = $false
+        $script:ExportScanButton.IsEnabled = $false
         $script:ExportButton.IsEnabled = $false
         $script:costAccessIssue = $null
         if ($script:costDeniedSubs) { $script:costDeniedSubs.Clear() }
@@ -5162,7 +4881,163 @@ $script:ScanButton.Add_Click({
         $script:scanTimer.Start()
     })
 
-# Cancel Scan Button
+# -- Helper: simple single-select list picker dialog --------------------
+function Show-ListPickerDialog {
+    param(
+        [string]$Title = 'Select',
+        [string]$Prompt = 'Choose an item:',
+        [Parameter(Mandatory)][object[]]$Items,
+        [scriptblock]$DisplayScript = { param($i) "$i" },
+        [System.Windows.Window]$ParentWindow
+    )
+    if (-not $Items -or $Items.Count -eq 0) { return $null }
+
+    $dlg = [System.Windows.Window]@{
+        Title = $Title; Width = 560; Height = 380
+        WindowStartupLocation = 'CenterOwner'; ResizeMode = 'NoResize'
+    }
+    if ($ParentWindow) { $dlg.Owner = $ParentWindow }
+
+    $grid = [System.Windows.Controls.Grid]@{ Margin = '14' }
+    1..3 | ForEach-Object { [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]@{ Height = 'Auto' }) }
+    $grid.RowDefinitions[1].Height = [System.Windows.GridLength]::new(1, 'Star')
+
+    $lbl = [System.Windows.Controls.TextBlock]@{ Text = $Prompt; Margin = '0,0,0,10'; TextWrapping = 'Wrap' }
+    [System.Windows.Controls.Grid]::SetRow($lbl, 0); [void]$grid.Children.Add($lbl)
+
+    $list = [System.Windows.Controls.ListBox]@{}
+    foreach ($it in $Items) {
+        $item = [System.Windows.Controls.ListBoxItem]@{ Content = (& $DisplayScript $it); Tag = $it }
+        [void]$list.Items.Add($item)
+    }
+    if ($list.Items.Count -gt 0) { $list.SelectedIndex = 0 }
+    [System.Windows.Controls.Grid]::SetRow($list, 1); [void]$grid.Children.Add($list)
+
+    $btnPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal'; HorizontalAlignment = 'Right'; Margin = '0,12,0,0' }
+    $ok = [System.Windows.Controls.Button]@{ Content = 'OK'; Width = 90; Margin = '0,0,8,0'; IsDefault = $true }
+    $cancel = [System.Windows.Controls.Button]@{ Content = 'Cancel'; Width = 90; IsCancel = $true }
+    [void]$btnPanel.Children.Add($ok); [void]$btnPanel.Children.Add($cancel)
+    [System.Windows.Controls.Grid]::SetRow($btnPanel, 2); [void]$grid.Children.Add($btnPanel)
+
+    $dlg.Content = $grid
+    # Store the result in a hashtable captured by the closure. Writing to
+    # $script: inside a .GetNewClosure() handler targets the closure's own
+    # module scope (not this function's), so the value would be lost. A
+    # captured hashtable reference is shared, so mutating .Picked works.
+    $result = @{ Picked = $null }
+    $ok.Add_Click({ if ($list.SelectedItem) { $result.Picked = $list.SelectedItem.Tag }; $dlg.DialogResult = $true; $dlg.Close() }.GetNewClosure())
+    $null = $dlg.ShowDialog()
+    return $result.Picked
+}
+
+# -- Cost Export Scan Button --------------------------------------------
+$script:ExportScanButton.Add_Click({
+        if (-not $script:scanData.Auth) {
+            [System.Windows.MessageBox]::Show(
+                "Connect to a tenant first (click 'Commercial Tenant' or 'Gov Tenant'), then choose 'Cost Export Scan'.",
+                'No tenant selected', 'OK', 'Information') | Out-Null
+            return
+        }
+
+        # -- Already armed: this click starts the export-mode scan ------
+        if ($script:ExportArmed -and $script:ArmedExport) {
+            $script:ScanMode = 'Export'
+            $script:ScanExport = $script:ArmedExport
+            $script:ScanExportData = $null
+            $script:ExportArmed = $false
+            $script:ArmedExport = $null
+            $script:ExportScanButton.Content = 'Cost Export Scan'
+            $script:ScanButton.Visibility = 'Collapsed'
+            $script:CancelScanButton.Visibility = 'Visible'
+            $script:TenantButton.IsEnabled = $false
+            $script:GovTenantButton.IsEnabled = $false
+            $script:ExportScanButton.IsEnabled = $false
+            $script:ExportButton.IsEnabled = $false
+            $script:costAccessIssue = $null
+            if ($script:costDeniedSubs) { $script:costDeniedSubs.Clear() }
+            $script:costSuccessCount = 0
+            $script:costDeniedStreak = 0
+            $script:currentStage = 0
+            $script:scanCancelled = $false
+            $script:scanTimer.Start()
+            return
+        }
+
+        $env  = $script:scanData.Auth.Environment
+        $subs = $script:scanData.Auth.Subscriptions
+
+        $script:ExportScanButton.IsEnabled = $false
+        $script:ScanButton.IsEnabled = $false
+        $script:StatusText.Text = 'Detecting Cost Management exports...'
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
+
+        $exports = @()
+        try { $exports = @(Find-CostExport -Subscriptions $subs -Environment $env) }
+        catch { Write-Warning "Export detection failed: $($_.Exception.Message)" }
+
+        $csvExports = @($exports | Where-Object { -not $_.Format -or $_.Format -match 'csv' })
+        $parquetOnly = @($exports | Where-Object { $_.Format -and $_.Format -notmatch 'csv' })
+
+        # -- No usable CSV export: offer to create one ------------------
+        if ($csvExports.Count -eq 0) {
+            $msg = if ($parquetOnly.Count -gt 0) {
+                "Found $($parquetOnly.Count) export(s), but they are Parquet format which this tool can't read directly.`n`nCreate a CSV export now? (Data lands in storage in a few minutes; re-run 'Cost Export Scan' after that.)"
+            } else {
+                "No Cost Management export was found in the selected subscriptions.`n`nCreate a daily CSV export now? (Data lands in storage in a few minutes; re-run 'Cost Export Scan' after that.)`n`nMeanwhile you can use 'Live Scan'."
+            }
+            $ans = [System.Windows.MessageBox]::Show($msg, 'Create Cost Export', 'YesNo', 'Question')
+            if ($ans -eq 'Yes') {
+                $script:StatusText.Text = 'Loading storage accounts...'
+                [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
+                $stores = @(Get-ExportStorageCandidates -Subscriptions $subs)
+                if ($stores.Count -eq 0) {
+                    [System.Windows.MessageBox]::Show("No storage accounts found in the selected subscriptions. Create one first, then retry.", 'No storage', 'OK', 'Warning') | Out-Null
+                } else {
+                    $picked = Show-ListPickerDialog -Title 'Choose export storage' -Prompt 'Select a storage account to receive the cost export:' -Items $stores -DisplayScript { param($s) "$($s.Name)  -  $($s.SubName)  ($($s.Location))" } -ParentWindow $window
+                    if ($picked) {
+                        $script:StatusText.Text = "Creating export in $($picked.Name)..."
+                        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
+                        $res = New-CostExport -SubscriptionId $picked.SubId -StorageResourceId $picked.ResourceId
+                        $icon = if ($res.Success) { 'Information' } else { 'Warning' }
+                        [System.Windows.MessageBox]::Show($res.Message, 'Cost Export', 'OK', $icon) | Out-Null
+                        $script:StatusText.Text = if ($res.Success) { "Export created. Re-run 'Cost Export Scan' in a few minutes." } else { 'Export creation failed.' }
+                    }
+                }
+            }
+            $script:ExportScanButton.IsEnabled = $true
+            $script:ScanButton.IsEnabled = $true
+            if (-not $script:StatusText.Text -or $script:StatusText.Text -eq 'Detecting Cost Management exports...') { $script:StatusText.Text = 'Ready.' }
+            return
+        }
+
+        # -- Pick the export (newest first) -----------------------------
+        $sortedExports = @($csvExports | Sort-Object { if ($_.LastRunDate) { $_.LastRunDate } else { [datetime]::MinValue } } -Descending)
+        $chosen = $sortedExports[0]
+        if ($sortedExports.Count -gt 1) {
+            $picked = Show-ListPickerDialog -Title 'Choose a cost export' -Prompt 'Multiple exports found. Select one to scan against:' -Items $sortedExports -DisplayScript {
+                param($e)
+                $age = if ($e.LastRunDate) { "$([int]((Get-Date) - $e.LastRunDate).TotalDays)d old - $($e.LastRunDate.ToString('yyyy-MM-dd'))" } else { 'run date unknown' }
+                "$($e.Name)  [$($e.Type)]  -  $($e.SubName)  ($age)"
+            } -ParentWindow $window
+            if (-not $picked) { $script:ExportScanButton.IsEnabled = $true; $script:ScanButton.IsEnabled = $true; $script:StatusText.Text = 'Ready.'; return }
+            $chosen = $picked
+        }
+
+        # -- Arm the export: relabel the green button to "Scan Export" --
+        # A second click on the button (now "Scan Export") starts the scan.
+        $ageStr = if ($chosen.LastRunDate) {
+            $days = [int]((Get-Date) - $chosen.LastRunDate).TotalDays
+            "$($chosen.LastRunDate.ToString('yyyy-MM-dd HH:mm')) ($days day$(if($days -ne 1){'s'}) old)"
+        } else { 'unknown (no run history)' }
+
+        $script:ArmedExport = $chosen
+        $script:ExportArmed = $true
+        $script:ExportScanButton.Content = 'Scan Export'
+        $script:ExportScanButton.IsEnabled = $true
+        $script:ScanButton.IsEnabled = $true
+        $script:StatusText.Text = "Export ready: $($chosen.Name) - latest data $ageStr. Click 'Scan Export' to begin (or 'Live Scan' for real-time)."
+        return
+    })
 $script:CancelScanButton.Add_Click({
         $result = [System.Windows.MessageBox]::Show(
             "Are you sure you want to cancel the scan?`n`nAny data already collected will be lost.",
@@ -5179,6 +5054,7 @@ $script:CancelScanButton.Add_Click({
             $script:ScanButton.Content = "Re-Scan"
             $script:TenantButton.IsEnabled = $true
             $script:GovTenantButton.IsEnabled = $true
+            $script:ExportScanButton.IsEnabled = $true
             $script:StatusText.Text = 'Scan cancelled.'
             $script:ProgressBar.Value = 0
         }
@@ -5201,15 +5077,21 @@ $script:TenantButton.Add_Click({
             $script:scanData.Auth = $authResult[-1]
             $envLabel = $script:scanData.Auth.Environment
             $subCount = $script:scanData.Auth.Subscriptions.Count
+            $totalSubs = $subCount
 
             # Let user select which subscriptions to scan
             $selected = Show-SubscriptionSelector -Subscriptions $script:scanData.Auth.Subscriptions -SkippedSubs $script:scanData.Auth.SkippedSubs -ParentWindow $window
             $script:scanData.Auth | Add-Member -NotePropertyName Subscriptions -NotePropertyValue @($selected) -Force
             $subCount = $script:scanData.Auth.Subscriptions.Count
+            # Flag a real subset so cost modules scope per-subscription instead
+            # of management-group scope (which covers the whole tenant).
+            $script:scanData.Auth | Add-Member -NotePropertyName IsSubset -NotePropertyValue ($subCount -lt $totalSubs) -Force
 
             $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
             $tenantSize = if ($script:scanData.Auth.TenantSize) { " [$($script:scanData.Auth.TenantSize)]" } else { '' }
             $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan' to begin."
+            # Clear any armed export from a previous connection
+            $script:ExportArmed = $false; $script:ArmedExport = $null; $script:ExportScanButton.Content = 'Cost Export Scan'
             # Show locked after successful selection
             $script:TenantButton.Content = "$($script:LockClosed) Commercial Tenant"
         }
@@ -5233,15 +5115,21 @@ $script:GovTenantButton.Add_Click({
             $script:scanData.Auth = $authResult[-1]
             $envLabel = $script:scanData.Auth.Environment
             $subCount = $script:scanData.Auth.Subscriptions.Count
+            $totalSubs = $subCount
 
             # Let user select which subscriptions to scan
             $selected = Show-SubscriptionSelector -Subscriptions $script:scanData.Auth.Subscriptions -SkippedSubs $script:scanData.Auth.SkippedSubs -ParentWindow $window
             $script:scanData.Auth | Add-Member -NotePropertyName Subscriptions -NotePropertyValue @($selected) -Force
             $subCount = $script:scanData.Auth.Subscriptions.Count
+            # Flag a real subset so cost modules scope per-subscription instead
+            # of management-group scope (which covers the whole tenant).
+            $script:scanData.Auth | Add-Member -NotePropertyName IsSubset -NotePropertyValue ($subCount -lt $totalSubs) -Force
 
             $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
             $tenantSize = if ($script:scanData.Auth.TenantSize) { " [$($script:scanData.Auth.TenantSize)]" } else { '' }
             $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan' to begin."
+            # Clear any armed export from a previous connection
+            $script:ExportArmed = $false; $script:ArmedExport = $null; $script:ExportScanButton.Content = 'Cost Export Scan'
             $script:GovTenantButton.Content = "$($script:LockClosed) Gov Tenant"
         }
         catch {
@@ -5898,6 +5786,9 @@ Write-Host "  AZURE FINOPS MULTITOOL" -ForegroundColor Cyan
 Write-Host "  ========================================" -ForegroundColor Cyan
 Write-Host "  Launching GUI..." -ForegroundColor Cyan
 Write-Host ""
+
+# Populate static guidance tabs once at load (no scan required)
+try { Populate-ExportSetupTab } catch { Write-Warning "Populate-ExportSetupTab failed: $($_.Exception.Message)" }
 
 $window.ShowDialog() | Out-Null
 

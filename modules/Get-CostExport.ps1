@@ -1,0 +1,580 @@
+###########################################################################
+# GET-COSTEXPORT.PS1
+# AZURE FINOPS MULTITOOL - Cost Management Export Detection & Fast Read
+###########################################################################
+# Purpose: Detect existing Cost Management Exports and read their CSV data
+#          from blob storage so the scanner can populate its cost tabs from
+#          a pre-materialized export instead of the throttle-bound live
+#          Cost Management query API.
+#
+# Why: The Cost Management query API enforces aggressive per-tenant 429
+#      throttling. Commercial FinOps tools (Apptio, CloudHealth, FinOps Hub)
+#      avoid this by ingesting bulk Cost Management Exports (FOCUS / classic
+#      CSV) and querying locally. This module brings the same "export scan"
+#      fast path to the standalone scanner.
+#
+# Scope: This module supplies the four cost-heavy modules' data contracts:
+#        Get-CostData, Get-ResourceCosts, Get-CostByTag, Get-CostTrend.
+#        Governance / ARG modules continue to run live.
+#
+# Format: CSV only. Parquet (FOCUS default) is detected and reported but not
+#         parsed natively in PowerShell - the caller offers to create a CSV
+#         export instead.
+#
+# Reference: https://learn.microsoft.com/rest/api/cost-management/exports
+###########################################################################
+
+# -- Blob endpoint suffix for the active cloud ----------------------------
+function Get-ExportBlobSuffix {
+    param([string]$Environment = 'AzureCloud')
+    switch ($Environment) {
+        'AzureUSGovernment' { 'blob.core.usgovcloudapi.net' }
+        'AzureChinaCloud'   { 'blob.core.chinacloudapi.cn' }
+        default             { 'blob.core.windows.net' }
+    }
+}
+
+# -- Storage blob data-plane REST call (list / get) -----------------------
+# Uses an AAD bearer token scoped to storage.azure.com. Returns the raw
+# response content (XML for list, CSV text for get) or $null on failure.
+function Invoke-StorageBlobRest {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [string]$StorageToken,
+        [int]$TimeoutSeconds = 60
+    )
+    if (-not $StorageToken) {
+        try { $StorageToken = Get-PlainAccessToken -ResourceUrl 'https://storage.azure.com' }
+        catch { Write-Warning "  Could not acquire storage token: $($_.Exception.Message)"; return $null }
+    }
+    $headers = @{
+        Authorization  = "Bearer $StorageToken"
+        'x-ms-version' = '2021-08-06'
+    }
+    try {
+        return Invoke-RestMethod -Uri $Uri -Headers $headers -Method GET -TimeoutSec $TimeoutSeconds -ErrorAction Stop
+    }
+    catch {
+        $code = $null
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        Write-Warning "  Storage request failed (HTTP $code): $Uri"
+        return $null
+    }
+}
+
+# -- Canonical export column resolver -------------------------------------
+# Cost Management exports vary in schema (classic ActualCost vs FOCUS). Map
+# the columns we need to whatever synonym the export actually used.
+function Resolve-ExportColumns {
+    param([Parameter(Mandatory)][string[]]$Header)
+
+    $syn = @{
+        Date          = @('Date', 'UsageDateTime', 'UsageDate', 'ChargePeriodStart', 'BillingPeriodStartDate')
+        SubscriptionId = @('SubscriptionId', 'SubscriptionGuid', 'SubAccountId')
+        SubscriptionName = @('SubscriptionName', 'SubAccountName')
+        ResourceGroup = @('ResourceGroup', 'ResourceGroupName', 'x_ResourceGroupName')
+        ResourceId    = @('ResourceId', 'InstanceId', 'InstanceName', 'x_ResourceId')
+        ServiceName   = @('ServiceName', 'MeterCategory', 'ConsumedService', 'x_ServiceName')
+        Cost          = @('CostInBillingCurrency', 'BilledCost', 'EffectiveCost', 'PreTaxCost', 'Cost', 'CostInUSD')
+        Currency      = @('BillingCurrency', 'BillingCurrencyCode', 'Currency')
+        Tags          = @('Tags')
+    }
+
+    # Build a case-insensitive lookup of the actual header
+    $actual = @{}
+    foreach ($h in $Header) { if ($h) { $actual[$h.Trim().ToLower()] = $h.Trim() } }
+
+    $map = @{}
+    foreach ($canon in $syn.Keys) {
+        foreach ($candidate in $syn[$canon]) {
+            $key = $candidate.ToLower()
+            if ($actual.ContainsKey($key)) { $map[$canon] = $actual[$key]; break }
+        }
+    }
+    return $map
+}
+
+# -- Parse an export Tags cell into a hashtable ---------------------------
+# Handles both classic ("env": "prod", "owner": "team") and FOCUS JSON
+# ({"env":"prod"}) tag encodings.
+function ConvertFrom-ExportTagString {
+    param([string]$Raw)
+    $out = @{}
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return $out }
+    $text = $Raw.Trim().Trim('{', '}')
+    foreach ($m in [regex]::Matches($text, '"([^"]+)"\s*:\s*"([^"]*)"')) {
+        $k = $m.Groups[1].Value
+        $v = $m.Groups[2].Value
+        if ($k) { $out[$k] = $v }
+    }
+    return $out
+}
+
+# -- Discover configured Cost Management Exports --------------------------
+# Enumerates exports at each selected subscription scope. Returns one
+# descriptor per export plus its newest run date (for the freshness prompt).
+function Find-CostExport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Subscriptions,
+        [string]$Environment = 'AzureCloud'
+    )
+
+    $apiVer = '2023-08-01'
+    $found  = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    foreach ($sub in $Subscriptions) {
+        $scope = "/subscriptions/$($sub.Id)"
+        $path  = "$scope/providers/Microsoft.CostManagement/exports?api-version=$apiVer"
+        $resp  = Invoke-AzRestMethodWithRetry -Path $path -Method GET
+        if (-not $resp -or $resp.StatusCode -ne 200) { continue }
+
+        $list = $null
+        try { $list = ($resp.Content | ConvertFrom-Json).value } catch { continue }
+        if (-not $list) { continue }
+
+        foreach ($exp in $list) {
+            $def    = $exp.properties.definition
+            $dest   = $exp.properties.deliveryInfo.destination
+            $format = if ($exp.properties.format) { $exp.properties.format } else { 'Csv' }
+
+            # Resolve the latest run date from run history (best-effort)
+            $lastRun = $null
+            try {
+                $rhPath = "$scope/providers/Microsoft.CostManagement/exports/$($exp.name)/runHistory?api-version=$apiVer"
+                $rh = Invoke-AzRestMethodWithRetry -Path $rhPath -Method GET
+                if ($rh -and $rh.StatusCode -eq 200) {
+                    $runs = ($rh.Content | ConvertFrom-Json).value
+                    if ($runs) {
+                        $dates = $runs | ForEach-Object {
+                            $p = $_.properties
+                            if ($p.processingEndTime) { [datetime]$p.processingEndTime }
+                            elseif ($p.submittedTime) { [datetime]$p.submittedTime }
+                        } | Where-Object { $_ } | Sort-Object -Descending
+                        if ($dates) { $lastRun = $dates[0] }
+                    }
+                }
+            }
+            catch { }
+
+            [void]$found.Add([PSCustomObject]@{
+                Name              = $exp.name
+                SubId             = $sub.Id
+                SubName           = $sub.Name
+                Scope             = $scope
+                Type              = $def.type
+                Granularity       = $def.dataSet.granularity
+                Format            = $format
+                Partitioned       = [bool]$exp.properties.partitionData
+                StorageResourceId = $dest.resourceId
+                Container         = $dest.container
+                RootFolder        = $dest.rootFolderPath
+                LastRunDate       = $lastRun
+            })
+        }
+    }
+
+    return $found
+}
+
+# -- Read an export's newest CSV data into normalized rows ----------------
+# Lists blobs under the export's folder, locates the newest run, downloads
+# the CSV (or manifest-referenced CSV parts), and returns normalized rows.
+function Get-CostExportData {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Export,
+        [string]$Environment = 'AzureCloud'
+    )
+
+    if ($Export.Format -and $Export.Format -notmatch 'csv') {
+        Write-Warning "  Export '$($Export.Name)' is $($Export.Format) format - CSV required."
+        return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; Unsupported = $true }
+    }
+
+    # Parse the storage account name from its ARM resource id
+    if ($Export.StorageResourceId -notmatch '/storageAccounts/([^/]+)') {
+        Write-Warning "  Could not parse storage account from export destination."
+        return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD' }
+    }
+    $account   = $Matches[1]
+    $suffix    = Get-ExportBlobSuffix -Environment $Environment
+    $blobBase  = "https://$account.$suffix"
+    $container = $Export.Container
+    $root      = ($Export.RootFolder).Trim('/')
+    $prefix    = if ($root) { "$root/$($Export.Name)/" } else { "$($Export.Name)/" }
+
+    $token = $null
+    try { $token = Get-PlainAccessToken -ResourceUrl 'https://storage.azure.com' }
+    catch { Write-Warning "  Storage token error: $($_.Exception.Message)"; return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD' } }
+
+    # List blobs under the export folder
+    $listUri = "$blobBase/$container`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($prefix))"
+    $xml = Invoke-StorageBlobRest -Uri $listUri -StorageToken $token
+    if (-not $xml) {
+        Write-Warning "  Could not list export blobs (storage access denied? needs Storage Blob Data Reader)."
+        return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; AccessDenied = $true }
+    }
+
+    # Collect blob entries (name + last-modified). Invoke-RestMethod returns
+    # XML as an object graph; normalize to a flat list.
+    $blobs = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $nodes = $null
+    if ($xml.EnumerationResults -and $xml.EnumerationResults.Blobs -and $xml.EnumerationResults.Blobs.Blob) {
+        $nodes = @($xml.EnumerationResults.Blobs.Blob)
+    }
+    foreach ($b in $nodes) {
+        $lm = $null
+        if ($b.Properties.'Last-Modified') { try { $lm = [datetime]$b.Properties.'Last-Modified' } catch { } }
+        [void]$blobs.Add([PSCustomObject]@{ Name = $b.Name; LastModified = $lm })
+    }
+
+    # CSV data files only; pick the newest run folder by last-modified
+    $csvBlobs = @($blobs | Where-Object { $_.Name -match '\.csv$' })
+    if ($csvBlobs.Count -eq 0) {
+        Write-Warning "  No CSV blobs found under $prefix."
+        return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD' }
+    }
+
+    $newest = ($csvBlobs | Sort-Object LastModified -Descending | Select-Object -First 1)
+    # A partitioned export writes multiple CSV parts in the same run folder.
+    # Group by the run folder (everything up to the last '/') of the newest blob.
+    $runFolder = ($newest.Name -replace '/[^/]+$', '/')
+    $runParts  = @($csvBlobs | Where-Object { $_.Name -like "$runFolder*" })
+    if ($runParts.Count -eq 0) { $runParts = @($newest) }
+
+    $dataDate = ($runParts | Sort-Object LastModified -Descending | Select-Object -First 1).LastModified
+
+    # Download + parse each CSV part
+    $rows     = [System.Collections.Generic.List[object]]::new()
+    $colMap   = $null
+    foreach ($part in $runParts) {
+        $blobUri = "$blobBase/$container/$([uri]::EscapeUriString($part.Name))"
+        $csvText = Invoke-StorageBlobRest -Uri $blobUri -StorageToken $token
+        if (-not $csvText) { continue }
+        if ($csvText -is [byte[]]) { $csvText = [System.Text.Encoding]::UTF8.GetString($csvText) }
+
+        $parsed = @($csvText | ConvertFrom-Csv)
+        if ($parsed.Count -eq 0) { continue }
+        if (-not $colMap) {
+            $header = $parsed[0].PSObject.Properties.Name
+            $colMap = Resolve-ExportColumns -Header $header
+        }
+        foreach ($r in $parsed) { [void]$rows.Add($r) }
+    }
+
+    # Determine currency from the first row that has one
+    $currency = 'USD'
+    if ($colMap -and $colMap.Currency) {
+        $c = ($rows | Where-Object { $_.$($colMap.Currency) } | Select-Object -First 1)
+        if ($c) { $currency = $c.$($colMap.Currency) }
+    }
+
+    return [PSCustomObject]@{
+        Rows     = $rows
+        ColMap   = $colMap
+        DataDate = $dataDate
+        Currency = $currency
+        RowCount = $rows.Count
+    }
+}
+
+# -- Internal: friendly resource type from an ARM resource id -------------
+function Get-ExportResourceType {
+    param([string]$ResourceId)
+    if ($ResourceId -match '/providers/([^/]+/[^/]+)/[^/]+$') {
+        return ($Matches[1] -replace '(?i)microsoft\.', '')
+    }
+    return 'Unknown'
+}
+
+# -- Converter: export rows -> Get-CostData costMap -----------------------
+function ConvertTo-CostDataFromExport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$ExportData,
+        [Parameter(Mandatory)][object[]]$Subscriptions
+    )
+    $costMap = @{}
+    $cm = $ExportData.ColMap
+    if (-not $cm -or -not $cm.Cost) { return $costMap }
+
+    # Seed every selected sub so the UI shows them even at $0
+    foreach ($s in $Subscriptions) { $costMap[$s.Id] = @{ Actual = 0; Forecast = 0; Currency = $ExportData.Currency } }
+
+    foreach ($r in $ExportData.Rows) {
+        $subId = if ($cm.SubscriptionId) { "$($r.$($cm.SubscriptionId))".Trim() } else { $null }
+        if (-not $subId) { continue }
+        $cost = 0.0; [double]::TryParse("$($r.$($cm.Cost))", [ref]$cost) | Out-Null
+        if (-not $costMap.ContainsKey($subId)) {
+            $costMap[$subId] = @{ Actual = 0; Forecast = 0; Currency = $ExportData.Currency }
+        }
+        $costMap[$subId].Actual += $cost
+    }
+
+    # Linear month-to-date projection for a sensible forecast
+    $now       = Get-Date
+    $daysInMo  = [DateTime]::DaysInMonth($now.Year, $now.Month)
+    $dayOfMo   = [math]::Max(1, $now.Day)
+    foreach ($k in @($costMap.Keys)) {
+        $costMap[$k].Actual = [math]::Round($costMap[$k].Actual, 2)
+        $costMap[$k].Forecast = [math]::Round($costMap[$k].Actual / $dayOfMo * $daysInMo, 2)
+    }
+    return $costMap
+}
+
+# -- Converter: export rows -> Get-ResourceCosts rows ---------------------
+function ConvertTo-ResourceCostsFromExport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$ExportData,
+        [Parameter(Mandatory)][object[]]$Subscriptions
+    )
+    $out = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $cm  = $ExportData.ColMap
+    if (-not $cm -or -not $cm.Cost -or -not $cm.ResourceId) { return $out }
+
+    $subNameMap = @{}
+    foreach ($s in $Subscriptions) { $subNameMap[$s.Id.ToLower()] = $s.Name }
+
+    $agg = @{}
+    foreach ($r in $ExportData.Rows) {
+        $rid = if ($cm.ResourceId) { "$($r.$($cm.ResourceId))".Trim() } else { '' }
+        if (-not $rid) { continue }
+        $cost = 0.0; [double]::TryParse("$($r.$($cm.Cost))", [ref]$cost) | Out-Null
+        $key = $rid.ToLower()
+        if (-not $agg.ContainsKey($key)) {
+            $subId = ''
+            if ($rid -match '/subscriptions/([^/]+)/') { $subId = $Matches[1].ToLower() }
+            $rg = if ($cm.ResourceGroup) { "$($r.$($cm.ResourceGroup))" } else { '' }
+            if (-not $rg -and $rid -match '/resourcegroups/([^/]+)/') { $rg = $Matches[1] }
+            $agg[$key] = @{
+                ResourcePath  = $rid
+                ResourceGroup = $rg
+                ResourceType  = Get-ExportResourceType -ResourceId $rid
+                Subscription  = if ($subId -and $subNameMap.ContainsKey($subId)) { $subNameMap[$subId] } else { '' }
+                Cost          = 0.0
+            }
+        }
+        $agg[$key].Cost += $cost
+    }
+
+    foreach ($v in $agg.Values) {
+        $c = [math]::Round($v.Cost, 2)
+        [void]$out.Add([PSCustomObject]@{
+            Subscription  = $v.Subscription
+            ResourceGroup = $v.ResourceGroup
+            ResourceType  = $v.ResourceType
+            ResourcePath  = $v.ResourcePath
+            Actual        = $c
+            Forecast      = $c
+            Currency      = $ExportData.Currency
+        })
+    }
+    return @($out | Sort-Object Actual -Descending)
+}
+
+# -- Converter: export rows -> Get-CostByTag result -----------------------
+function ConvertTo-CostByTagFromExport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$ExportData,
+        [hashtable]$ExistingTags = @{}
+    )
+    $cm = $ExportData.ColMap
+    $results = @{}
+    if (-not $cm -or -not $cm.Cost -or -not $cm.Tags) {
+        return [PSCustomObject]@{ TagsQueried = @(); CostByTag = $results; NoTagsFound = $true; UsedTimeframe = 'Export' }
+    }
+
+    # tagKey -> ( tagValue -> cost )
+    $byKey = @{}
+    foreach ($r in $ExportData.Rows) {
+        $raw = "$($r.$($cm.Tags))"
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        $cost = 0.0; [double]::TryParse("$($r.$($cm.Cost))", [ref]$cost) | Out-Null
+        if ($cost -eq 0) { continue }
+        $tags = ConvertFrom-ExportTagString -Raw $raw
+        foreach ($tk in $tags.Keys) {
+            $tv = $tags[$tk]
+            if (-not $byKey.ContainsKey($tk)) { $byKey[$tk] = @{} }
+            if (-not $byKey[$tk].ContainsKey($tv)) { $byKey[$tk][$tv] = 0.0 }
+            $byKey[$tk][$tv] += $cost
+        }
+    }
+
+    foreach ($tk in $byKey.Keys) {
+        $vals = foreach ($tv in $byKey[$tk].Keys) {
+            [PSCustomObject]@{
+                TagValue = $tv
+                Cost     = [math]::Round($byKey[$tk][$tv], 2)
+                Currency = $ExportData.Currency
+            }
+        }
+        $results[$tk] = @($vals | Sort-Object Cost -Descending)
+    }
+
+    return [PSCustomObject]@{
+        TagsQueried   = @($byKey.Keys)
+        CostByTag     = $results
+        NoTagsFound   = ($byKey.Count -eq 0)
+        UsedTimeframe = 'Export'
+    }
+}
+
+# -- Converter: export rows -> Get-CostTrend result -----------------------
+# A single export run usually covers the current billing month; trend will
+# show whatever months the export's date range contains.
+function ConvertTo-CostTrendFromExport {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$ExportData)
+
+    $cm = $ExportData.ColMap
+    $months = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $bySub  = @{}
+    if (-not $cm -or -not $cm.Cost -or -not $cm.Date) {
+        return [PSCustomObject]@{ Months = @(); BySubscription = $bySub; HasData = $false }
+    }
+
+    $agg     = @{}   # yyyy-MM -> @{ Cost; Date }
+    $subAgg  = @{}   # subId -> ( yyyy-MM -> @{ Cost; Date } )
+    foreach ($r in $ExportData.Rows) {
+        $dt = $null
+        try { $dt = [datetime]"$($r.$($cm.Date))" } catch { continue }
+        $cost = 0.0; [double]::TryParse("$($r.$($cm.Cost))", [ref]$cost) | Out-Null
+        $firstOfMo = Get-Date -Year $dt.Year -Month $dt.Month -Day 1 -Hour 0 -Minute 0 -Second 0
+        $key = $dt.ToString('yyyy-MM')
+
+        if (-not $agg.ContainsKey($key)) { $agg[$key] = @{ Cost = 0.0; Date = $firstOfMo } }
+        $agg[$key].Cost += $cost
+
+        if ($cm.SubscriptionId) {
+            $subId = "$($r.$($cm.SubscriptionId))".Trim()
+            if ($subId) {
+                if (-not $subAgg.ContainsKey($subId)) { $subAgg[$subId] = @{} }
+                if (-not $subAgg[$subId].ContainsKey($key)) { $subAgg[$subId][$key] = @{ Cost = 0.0; Date = $firstOfMo } }
+                $subAgg[$subId][$key].Cost += $cost
+            }
+        }
+    }
+
+    foreach ($entry in $agg.GetEnumerator() | Sort-Object Key) {
+        [void]$months.Add([PSCustomObject]@{
+            Month     = $entry.Value.Date.ToString('MMM yyyy')
+            MonthDate = $entry.Value.Date
+            Cost      = [math]::Round($entry.Value.Cost, 2)
+            Currency  = $ExportData.Currency
+        })
+    }
+
+    foreach ($subId in $subAgg.Keys) {
+        $list = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($entry in $subAgg[$subId].GetEnumerator() | Sort-Object Key) {
+            [void]$list.Add([PSCustomObject]@{
+                Month     = $entry.Value.Date.ToString('MMM yyyy')
+                MonthDate = $entry.Value.Date
+                Cost      = [math]::Round($entry.Value.Cost, 2)
+                Currency  = $ExportData.Currency
+            })
+        }
+        $bySub[$subId] = @($list | Sort-Object MonthDate)
+    }
+
+    $sorted = @($months | Sort-Object MonthDate)
+    return [PSCustomObject]@{
+        Months         = $sorted
+        BySubscription = $bySub
+        HasData        = ($sorted.Count -gt 0)
+    }
+}
+
+# -- List storage accounts available for a create-export target -----------
+# Used by the create-export picker when no export is found. Returns the
+# storage accounts in the selected subscriptions (name + resource id).
+function Get-ExportStorageCandidates {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object[]]$Subscriptions)
+
+    $out = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($sub in $Subscriptions) {
+        $path = "/subscriptions/$($sub.Id)/providers/Microsoft.Storage/storageAccounts?api-version=2023-01-01"
+        $resp = Invoke-AzRestMethodWithRetry -Path $path -Method GET
+        if (-not $resp -or $resp.StatusCode -ne 200) { continue }
+        $accts = $null
+        try { $accts = ($resp.Content | ConvertFrom-Json).value } catch { continue }
+        foreach ($a in $accts) {
+            [void]$out.Add([PSCustomObject]@{
+                Name       = $a.name
+                ResourceId = $a.id
+                SubId      = $sub.Id
+                SubName    = $sub.Name
+                Location   = $a.location
+            })
+        }
+    }
+    return $out
+}
+
+# -- Create a CSV MonthToDate export and trigger an initial run -----------
+# Creates a daily ActualCost CSV export at subscription scope pointing at the
+# chosen storage account, then triggers a one-time run. Data is not instant -
+# the caller should warn the user it materializes in a few minutes.
+function New-CostExport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        [Parameter(Mandatory)][string]$StorageResourceId,
+        [string]$Container = 'finops-multitool-exports',
+        [string]$RootFolder = 'exports',
+        [string]$Name = 'FinOpsMultitool-MTD-CSV'
+    )
+
+    $apiVer = '2023-08-01'
+    $scope  = "/subscriptions/$SubscriptionId"
+    $path   = "$scope/providers/Microsoft.CostManagement/exports/$Name`?api-version=$apiVer"
+
+    $body = @{
+        properties = @{
+            schedule = @{
+                status     = 'Active'
+                recurrence = 'Daily'
+                recurrencePeriod = @{
+                    from = (Get-Date).ToString('yyyy-MM-ddT00:00:00Z')
+                    to   = (Get-Date).AddYears(1).ToString('yyyy-MM-ddT00:00:00Z')
+                }
+            }
+            format       = 'Csv'
+            partitionData = $true
+            deliveryInfo = @{
+                destination = @{
+                    resourceId     = $StorageResourceId
+                    container      = $Container
+                    rootFolderPath = $RootFolder
+                }
+            }
+            definition = @{
+                type      = 'ActualCost'
+                timeframe = 'MonthToDate'
+                dataSet   = @{ granularity = 'Daily' }
+            }
+        }
+    } | ConvertTo-Json -Depth 12
+
+    $create = Invoke-AzRestMethodWithRetry -Path $path -Method PUT -Payload $body
+    if (-not $create -or $create.StatusCode -notin @(200, 201)) {
+        $msg = if ($create) { "HTTP $($create.StatusCode)" } else { 'no response' }
+        return [PSCustomObject]@{ Success = $false; Message = "Export creation failed ($msg). Needs Cost Management Contributor + Storage Blob Data Contributor."; Name = $Name }
+    }
+
+    # Trigger an immediate one-time run so data starts materializing
+    $runPath = "$scope/providers/Microsoft.CostManagement/exports/$Name/run`?api-version=$apiVer"
+    $run = Invoke-AzRestMethodWithRetry -Path $runPath -Method POST
+    $runOk = ($run -and $run.StatusCode -in @(200, 202))
+
+    return [PSCustomObject]@{
+        Success   = $true
+        RunQueued = $runOk
+        Name      = $Name
+        Message   = if ($runOk) { "Export '$Name' created and a run was queued. Data lands in storage in a few minutes." } else { "Export '$Name' created. Trigger a run from the portal, or wait for the daily schedule." }
+    }
+}

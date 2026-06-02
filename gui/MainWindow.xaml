@@ -118,7 +118,7 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
-                        <TextBlock x:Name="VersionLabel" Text="v2.7.0" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                        <TextBlock x:Name="VersionLabel" Text="v2.10.0" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
                     </StackPanel>
                     <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
@@ -128,8 +128,12 @@
                             Background="Transparent" Foreground="White" BorderBrush="White" Margin="0,0,8,0"/>
                     <Button x:Name="GovTenantButton" Content="&#x1F513; Gov Tenant" Style="{StaticResource AzureButton}"
                             Background="Transparent" Foreground="White" BorderBrush="#8DC6FF" Margin="0,0,8,0"/>
-                    <Button x:Name="ScanButton" Content="&#x26A1; Scan" Style="{StaticResource AzureButton}"
-                            Background="White" Foreground="#0078D4" Margin="0,0,8,0"/>
+                    <Button x:Name="ScanButton" Content="&#x26A1; Live Scan" Style="{StaticResource AzureButton}"
+                            Background="White" Foreground="#0078D4" Margin="0,0,8,0"
+                            ToolTip="Slower but live &#x2014; queries the Azure Cost Management API directly for real-time spend. Subject to throttling on large tenants."/>
+                    <Button x:Name="ExportScanButton" Content="Cost Export Scan" Style="{StaticResource AzureButton}"
+                            Background="#107C10" Foreground="White" Margin="0,0,8,0"
+                            ToolTip="Faster scan against a Cost Management export (typically ~1 day old). Governance checks still run live."/>
                     <Button x:Name="CancelScanButton" Content="&#x274C; Cancel" Style="{StaticResource AzureButton}"
                             Background="#E81123" Foreground="White" Margin="0,0,8,0" Visibility="Collapsed"/>
                     <Button x:Name="ExportButton" Content="&#x1F4CA; Export Scan Results" Style="{StaticResource AzureButton}"
@@ -780,7 +784,112 @@
                     </ScrollViewer>
                 </TabItem>
 
+                <!-- Export Setup Tab ============================ -->
+                <TabItem Header="  Export Setup  " FontSize="13">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                        <StackPanel x:Name="ExportSetupPanel" MaxWidth="900" HorizontalAlignment="Left">
+
+                            <TextBlock Text="Set Up a Cost Export Scan" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,8">
+                                <Run Text="A "/><Run Text="Cost Export Scan" FontWeight="SemiBold"/><Run Text=" reads a Cost Management export (bulk CSV already written to an Azure Storage account) instead of querying the live Cost Management API. Results render faster because the data is read in bulk from storage rather than the throttled live API."/>
+                            </TextBlock>
+                            <Border Background="#FFF4CE" BorderBrush="#E6C200" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,16">
+                                <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#5A4A00">
+                                    <Run Text="Tip:" FontWeight="Bold"/><Run Text=" If you don't have an export yet, the easiest path is to click "/><Run Text="🚀 Cost Export Scan" FontWeight="SemiBold"/><Run Text=" on the toolbar — when no export is found, the tool offers to create a daily CSV export for you. The steps below explain the permissions and options, including private / firewalled storage."/>
+                                </TextBlock>
+                            </Border>
+
+                            <!-- Step 1: Permissions -->
+                            <TextBlock Text="Step 1 — Permissions you need" Style="{StaticResource SectionHeader}" Foreground="#0078D4" FontSize="15"/>
+                            <Border Background="#F5F9FD" BorderBrush="#D7E6F5" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,6">
+                                        <Run Text="On the cost scope" FontWeight="SemiBold"/><Run Text=" (subscription, resource group, management group, or billing account):"/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,2" Text="• Owner — create, modify, or delete scheduled exports."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,2" Text="• Contributor — create / modify / delete their own exports."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,8" Text="• Reader — can schedule exports they have permission to."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,6">
+                                        <Run Text="On the storage account:" FontWeight="SemiBold"/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,2" Text="• Write permission to set or change the destination storage account."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,2">
+                                        <Run Text="• To read the export blobs, this tool uses your signed-in identity — you need "/><Run Text="Storage Blob Data Reader" FontWeight="SemiBold"/><Run Text=" (or higher) on the account or container."/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Step 2: Create the export -->
+                            <TextBlock Text="Step 2 — Create the export" Style="{StaticResource SectionHeader}" Foreground="#107C10" FontSize="15"/>
+                            <Border Background="#F3FAF3" BorderBrush="#CDE8CD" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,4">
+                                        <Run Text="Option A — Let this tool create it (recommended):" FontWeight="SemiBold"/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,8" Text="Click 🚀 Cost Export Scan. If no readable export exists, pick a storage account and the tool creates a daily Month-to-date CSV export, partitioned for large datasets."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,4">
+                                        <Run Text="Option B — Azure portal:" FontWeight="SemiBold"/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,8" Text="Cost Management → Exports → Create. Dataset: Cost and usage details (actual) or FOCUS. Format: CSV. Frequency: Daily export of month-to-date costs. Enable file partitioning."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,4">
+                                        <Run Text="Option C — Azure CLI:" FontWeight="SemiBold"/>
+                                    </TextBlock>
+                                    <Border Background="#1E1E1E" CornerRadius="3" Padding="8" Margin="12,0,0,8">
+                                        <TextBlock FontFamily="Consolas" FontSize="11.5" Foreground="#DCDCDC" TextWrapping="Wrap" Text="az costmanagement export create --name FinOpsExport --type ActualCost --scope &quot;subscriptions/&lt;sub-id&gt;&quot; --storage-account-id &lt;storage-resource-id&gt; --storage-container finops-exports --timeframe MonthToDate --recurrence Daily --schedule-status Active"/>
+                                    </Border>
+                                    <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="#8A6D00" Margin="0,2,0,0">
+                                        <Run Text="Note:" FontWeight="Bold"/><Run Text=" New subscriptions can take up to 48 hours before Cost Management features (including exports) are usable. The first export run takes a few minutes to a few hours to materialize — re-run the scan after the data lands."/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Step 3: Private / firewalled storage -->
+                            <TextBlock Text="Step 3 — Private or firewalled storage" Style="{StaticResource SectionHeader}" Foreground="#8764B8" FontSize="15"/>
+                            <Border Background="#F8F5FB" BorderBrush="#E0D5EC" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,8" Text="If the storage account uses a firewall, selected networks, or private endpoints, configure the following so the export can write and so this tool can read:"/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,4">
+                                        <Run Text="• Enable "/><Run Text="Allow trusted Azure services" FontWeight="SemiBold"/><Run Text=" on the storage account Networking page (auto-enabled when you create an export against an existing account)."/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,4">
+                                        <Run Text="• A "/><Run Text="system-assigned managed identity" FontWeight="SemiBold"/><Run Text=" is created for the export; Cost Management assigns it "/><Run Text="Storage Blob Data Contributor" FontWeight="SemiBold"/><Run Text=" scoped to the container. To create/modify an export against firewalled storage you need "/><Run Text="Owner" FontWeight="SemiBold"/><Run Text=" on the account, or a custom role with Microsoft.Authorization/roleAssignments/write and Microsoft.Authorization/permissions/read. After creation, Owner is no longer required for routine runs."/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,4">
+                                        <Run Text="• To delete an export later you need Microsoft.Authorization/roleAssignments/delete (otherwise remove the managed identity's role assignment manually)."/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,4">
+                                        <Run Text="• Set "/><Run Text="Permitted scope for copy operations" FontWeight="SemiBold"/><Run Text=" to "/><Run Text="From any storage account" FontWeight="SemiBold"/><Run Text=". Firewalled exports require Exports REST API version 2023-08-01 or later (this tool uses 2023-08-01)."/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,4">
+                                        <Run Text="• Firewalls are supported only for storage in the "/><Run Text="same tenant" FontWeight="SemiBold"/><Run Text=". Cross-tenant firewalled exports aren't supported — for partner / cross-tenant, use a SAS-token export and storage without a firewall."/>
+                                    </TextBlock>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,0">
+                                        <Run Text="• This tool reads blobs over the storage data plane, so the machine running the scanner must be able to "/><Run Text="reach" FontWeight="SemiBold"/><Run Text=" the account. With a private endpoint or selected-networks firewall, run the scanner from an allowed network (the VNet / private-endpoint DNS or an allow-listed IP) and ensure your identity has Storage Blob Data Reader."/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Step 4: Run it -->
+                            <TextBlock Text="Step 4 — Run the Export Scan" Style="{StaticResource SectionHeader}" Foreground="#D83B01" FontSize="15"/>
+                            <Border Background="#FDF6F3" BorderBrush="#F0D8CC" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="0,0,0,4" Text="Once the first run has landed, click 🚀 Cost Export Scan, confirm the detected export and its date in the prompt, and the cost tabs populate from the export. Governance and resource-graph checks still run live for freshness."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444">
+                                        <Run Text="This tool reads "/><Run Text="CSV" FontWeight="SemiBold"/><Run Text=" exports only (classic and FOCUS schemas). If you only have a Parquet export, create a CSV one — the Cost Export Scan button will offer to do this."/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Docs -->
+                            <TextBlock Text="Microsoft documentation" Style="{StaticResource SectionHeader}" Foreground="#005A9E" FontSize="15"/>
+                            <StackPanel x:Name="ExportSetupLinksPanel" Margin="0,0,0,16"/>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
             </TabControl>
+
         </Grid>
     </DockPanel>
 </Window>

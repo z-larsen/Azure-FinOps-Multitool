@@ -16,7 +16,10 @@ function Get-ResourceCosts {
         [string]$TenantId,
 
         [Parameter()]
-        $CostData      # Per-sub cost data for forecast ratio distribution
+        $CostData,      # Per-sub cost data for forecast ratio distribution
+
+        [Parameter()]
+        [switch]$RestrictToSelected
     )
 
     # Guard: extract hashtable if pipeline pollution wrapped it in an array
@@ -69,7 +72,10 @@ function Get-ResourceCosts {
     $gotMgData = $false
 
     # -- Strategy 1: MG-scope query (1-10 API calls instead of 300+) ----
-    $mgScopeId = if ($TenantId) { Resolve-CostMgId -TenantId $TenantId } else { $null }
+    # When the user picked a subset of subscriptions, skip MG scope (whole
+    # management group) and use the per-subscription fallback so resource
+    # costs only include the selected subscriptions.
+    $mgScopeId = if ($TenantId -and -not $RestrictToSelected) { Resolve-CostMgId -TenantId $TenantId } else { $null }
     if ($mgScopeId) {
         try {
             Write-Host "  Querying resource costs (MG scope)..." -ForegroundColor Cyan

@@ -21,7 +21,10 @@ function Get-CostByTag {
         [hashtable]$ExistingTags,
 
         [Parameter()]
-        [object[]]$Subscriptions
+        [object[]]$Subscriptions,
+
+        [Parameter()]
+        [switch]$RestrictToSelected
     )
 
     # Tags we want to break cost down by (in priority order — matches CAF allocation tags)
@@ -111,7 +114,10 @@ function Get-CostByTag {
     }
 
     $results = @{}
-    $mgScopeId  = Resolve-CostMgId -TenantId $TenantId
+    # When the user picked a subset of subscriptions, skip MG scope (which
+    # covers the whole management group) so cost-by-tag totals only include
+    # the selected subscriptions via the per-subscription path.
+    $mgScopeId  = if ($RestrictToSelected) { $null } else { Resolve-CostMgId -TenantId $TenantId }
     $useMgScope = [bool]$mgScopeId
     $mgPath = "/providers/Microsoft.Management/managementGroups/$mgScopeId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
 
@@ -325,8 +331,17 @@ function Get-CostByTag {
             }
         }
 
-        # Per-sub fallback for batched query (parallel)
-        if (-not $batchSuccess -and $Subscriptions) {
+        # Per-sub fallback for batched query (parallel).
+        # The TagKey+TagValue batched grouping is an MG/EA-scope feature; per
+        # subscription it almost always returns HTTP 408 (timeout) or 400, so on
+        # large tenants this fan-out just burns ~90s per timeframe before the
+        # per-tag fallback runs anyway. Only attempt it on small tenants where it
+        # can actually pay off; large tenants skip straight to the per-tag path.
+        $batchedPerSubCap = 10
+        if (-not $batchSuccess -and $Subscriptions -and $Subscriptions.Count -gt $batchedPerSubCap) {
+            Write-Host "    Skipping per-sub batched fan-out for $($Subscriptions.Count) subs (unsupported at sub scope) - using per-tag queries" -ForegroundColor DarkGray
+        }
+        elseif (-not $batchSuccess -and $Subscriptions) {
             $allBatched = @{}
             $calls = @()
             foreach ($sub in $Subscriptions) {
@@ -434,6 +449,13 @@ function Get-CostByTag {
 
         Write-Host "  Batched tag query not available, falling back to per-tag queries ($($tagsToQuery.Count) tags)..." -ForegroundColor Yellow
 
+        # Throttle-awareness: when the tenant is rate-limiting cost queries the
+        # per-sub fan-out returns all 408/429 and no usable data. Track that so
+        # we skip the secondary Custom timeframe and stop iterating tags instead
+        # of grinding the full tag x timeframe x sub matrix against a 429 wall.
+        $throttleStreak = 0
+        $throttleCap    = 2
+
         $tagQueryCount = 0
         foreach ($tagName in $tagsToQuery) {
             $tagQueryCount++
@@ -448,6 +470,12 @@ function Get-CostByTag {
 
                 foreach ($tf in $timeframes) {
                     if ($gotData) { break }
+                    # Tenant is throttle-bound - the secondary Custom fan-out just
+                    # doubles the 429/408 storm for no data, so skip it.
+                    if ($tf -eq 'Custom' -and $throttleStreak -ge 1) {
+                        Write-Host "    Skipping $tf timeframe for $tagName (tenant is rate-limited)" -ForegroundColor DarkGray
+                        break
+                    }
 
                     Write-Host "  Querying cost by tag: $tagName ($tf)..." -ForegroundColor Cyan
                     $bodyObj = @{
@@ -510,11 +538,16 @@ function Get-CostByTag {
                         if ($calls.Count -gt 0) {
                             Write-Host "    Querying $($calls.Count) subs in parallel for $tagName ($tf)..." -ForegroundColor Cyan
                             $parallelJobs = Invoke-ParallelRestCalls -Calls $calls
+                            $ok200 = 0; $timedOut = 0
                             foreach ($pj in $parallelJobs) {
                                 $subResp = $pj.Result
                                 if ($subResp.StatusCode -eq 200) {
+                                    $ok200++
                                     $subRows = Parse-CostRows -ResponseContent $subResp.Content
                                     foreach ($r in $subRows) { [void]$tagCosts.Add($r) }
+                                }
+                                elseif ($subResp.StatusCode -in @(408, 429)) {
+                                    $timedOut++
                                 }
                                 elseif ($subResp.StatusCode -eq 400) {
                                     $errBody = try { ($subResp.Content | ConvertFrom-Json).error.message } catch { '' }
@@ -528,6 +561,14 @@ function Get-CostByTag {
                                 elseif ($subResp.StatusCode -eq 403) {
                                     $script:costAccessIssue = 'MCA'
                                 }
+                            }
+                            # No usable data and the fan-out was dominated by
+                            # timeouts/throttling -> the tenant is rate-limited.
+                            if ($ok200 -eq 0 -and $timedOut -gt 0) {
+                                $throttleStreak++
+                            }
+                            elseif ($ok200 -gt 0) {
+                                $throttleStreak = 0
                             }
                         }
 
@@ -552,6 +593,13 @@ function Get-CostByTag {
             }
             catch {
                 Write-Warning "Cost-by-tag query for '$tagName' failed: $($_.Exception.Message)"
+            }
+
+            # The tenant has rate-limited several tags in a row with no data -
+            # stop here rather than grinding the remaining tags into the 429 wall.
+            if ($throttleStreak -ge $throttleCap) {
+                Write-Host "  Cost-by-tag stopping early after $tagQueryCount tag(s) - tenant is rate-limiting cost queries (HTTP 429/408). Keeping partial results." -ForegroundColor Yellow
+                break
             }
         }
     } # end per-tag fallback

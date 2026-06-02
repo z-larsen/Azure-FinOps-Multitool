@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.7.0](https://img.shields.io/badge/Version-2.7.0-brightgreen)
+![Version 2.10.0](https://img.shields.io/badge/Version-2.10.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,33 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.10.0
+
+**Fixed — dialog selections were silently dropped:**
+- **Subscription subset is now respected.** Selecting a subset of subscriptions previously had no effect — every scan still covered the whole tenant. Root cause: the subscription-selector dialog stored its result in a `$script:` variable written from inside a `.GetNewClosure()` handler, where `$script:` targets the closure's own module scope, so the selection was lost and the function fell back to "return all subscriptions." The result is now passed back through a captured reference, so subset choices stick and cost stages scope per-subscription instead of management-group scope.
+- **Cost Export Scan can now actually be started.** The same closure-scope bug in the list-picker dialog made the export picker return nothing, so after choosing an export the tool dropped to "Ready." with no way to run. Picking an export now works.
+
+**Changed — clearer Cost Export Scan flow:**
+- Selecting an export now **arms** the scan: the green button relabels to **"Scan Export"** and the status bar shows the chosen export and its data age. Click **Scan Export** to run, or **Live Scan** for real-time. (Replaces the old Yes/No/Cancel message box.)
+- Removed the emoji from the **Cost Export Scan** button.
+- New `modules/New-PowerBITemplate.ps1` for Power BI template export of scan results.
+
+### v2.9.0
+
+**New — dual scan modes (Live Scan + Cost Export Scan):**
+- **Cost Export Scan** — a faster scan path that reads a Cost Management *export* (bulk CSV in storage) instead of hammering the throttled live Cost Management query API. The four cost-heavy stages (cost data, resource costs, cost-by-tag, cost trend) are served from the export; governance/ARG checks still run live. This is the same bulk-ingest pattern commercial FinOps tools use to avoid per-tenant 429 throttling.
+- **Live Scan** — the original real-time path, now clearly labelled. Hover tooltips spell out the tradeoff: Live = slower but real-time; Cost Export = faster but typically ~1 day old.
+- **Export detection + freshness prompt** — on Cost Export Scan the tool finds existing exports, shows the newest export's last-run date and age, and asks whether to run against it, switch to a Live Scan, or cancel.
+- **Create-export fallback** — if no readable CSV export exists (or only Parquet exports are found), the tool offers to create a daily Month-to-Date CSV export into a storage account you pick, then prompts you to re-run once the data lands.
+- New module `modules/Get-CostExport.ps1` handles export discovery, CSV blob reads (classic + FOCUS schemas), and conversion into the existing cost-module data contracts.
+- **New "Export Setup" tab** — a guided, doc-driven walkthrough (populated at app load) for users who don't have an export yet: required permissions (cost scope + Storage Blob Data Reader), how to create an export (this tool / portal / `az` CLI), and a full section on **private / firewalled storage** (trusted Azure services, managed-identity Storage Blob Data Contributor, copy-scope, API version 2023-08-01, same-tenant limits, and reaching the account over a private endpoint). Includes links to the latest Microsoft Learn docs.
+
+### v2.8.0
+
+**Performance:**
+- **Cost-by-tag no longer stalls on large tenants** — the per-subscription *batched* tag query (which groups by `TagKey`+`TagValue`) is a management-group/EA-scope feature that almost always times out at subscription scope. On tenants with more than 10 subscriptions the scanner now skips that doomed fan-out entirely and goes straight to the per-tag queries, eliminating ~90 seconds of wasted time per timeframe (≈3 minutes round-trip) that previously showed up as a flood of `HTTP 408` lines.
+- **Throttle-aware early exit for cost-by-tag** — when the Cost Management API starts rate-limiting (HTTP 429/408) the scanner now detects that the per-subscription fan-out is returning no usable data, skips the secondary *Custom* (last-month) timeframe, and stops iterating the remaining tags after two throttled passes instead of grinding the full tag × timeframe × subscription matrix into the 429 wall. Partial tag results are kept and the run finishes in a predictable amount of time.
 
 ### v2.7.0
 

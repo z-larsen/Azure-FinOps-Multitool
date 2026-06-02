@@ -14,7 +14,10 @@ function Get-CostTrend {
         [string]$TenantId,
 
         [Parameter()]
-        [object[]]$Subscriptions
+        [object[]]$Subscriptions,
+
+        [Parameter()]
+        [switch]$RestrictToSelected
     )
 
     Write-Host "  Querying 6-month cost trend..." -ForegroundColor Cyan
@@ -201,7 +204,10 @@ function Get-CostTrend {
             # -- Multi-sub path: one grouped MG-scope query ---------------
             # group by SubscriptionId so a single call returns the month x
             # subscription matrix (aggregate + per-sub) in one response.
-            $mgScopeId  = Resolve-CostMgId -TenantId $TenantId
+            # When the user picked a subset of subscriptions, skip MG scope
+            # (whole management group) and use the per-subscription loop so the
+            # trend only reflects the selected subscriptions.
+            $mgScopeId  = if ($RestrictToSelected) { $null } else { Resolve-CostMgId -TenantId $TenantId }
             $useMgScope = [bool]$mgScopeId
             $groupedOk  = $false
 
