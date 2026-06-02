@@ -61,14 +61,29 @@ function Invoke-AzRestMethodWithRetry {
         [int]$TimeoutSeconds = 60
     )
 
-    # Circuit breaker: once cost access is known to be denied tenant-wide, do
-    # not call the (already throttled) Cost Management API again. Return a
-    # synthetic 403 immediately so cost modules skip cleanly instead of looping.
-    if ($script:costAccessIssue -and $Path -match 'Microsoft\.CostManagement') {
-        return [PSCustomObject]@{
-            StatusCode = 403
-            Content    = '{"error":{"message":"Cost access unavailable (skipped to avoid throttling)."}}'
-            Headers    = @{}
+    # Circuit breaker for the Cost Management API. Two layers:
+    #   1. Global breaker ($script:costAccessIssue) - tripped only on a genuine
+    #      tenant-wide block (EA/MCA policy off, or a long run of denials with
+    #      zero successes). Skips ALL cost calls to avoid a 429 throttle storm.
+    #   2. Per-subscription breaker ($script:costDeniedSubs) - in a mixed-RBAC
+    #      tenant you may hold Cost Management Reader on some subscriptions but
+    #      not others. Skip only the subs that already denied; keep querying the
+    #      rest so their cost data is still collected.
+    if ($Path -match 'Microsoft\.CostManagement') {
+        if ($script:costAccessIssue) {
+            return [PSCustomObject]@{
+                StatusCode = 403
+                Content    = '{"error":{"message":"Cost access unavailable (skipped to avoid throttling)."}}'
+                Headers    = @{}
+            }
+        }
+        if ($Path -match '/subscriptions/([^/]+)/providers/Microsoft\.CostManagement' -and
+            $script:costDeniedSubs -and $script:costDeniedSubs.Contains($Matches[1])) {
+            return [PSCustomObject]@{
+                StatusCode = 403
+                Content    = '{"error":{"message":"Cost access unavailable for this subscription (skipped)."}}'
+                Headers    = @{}
+            }
         }
     }
 
@@ -136,14 +151,45 @@ function Invoke-AzRestMethodWithRetry {
         }
 
         if ($resp.StatusCode -ne 429) {
-            # Trip the cost-access breaker only on a denial at SUBSCRIPTION scope.
             # A 401/403 at the management-group scope is usually just a missing
             # cost role at the tenant root (a scope gap) where per-subscription
-            # cost still works - it must NOT trip the breaker. A denial at the
-            # subscription scope is a real tenant-wide block, so short-circuit the
-            # remaining cost calls to avoid a 429 throttle storm.
-            if ($resp.StatusCode -in @(401, 403) -and $Path -match '/subscriptions/[^/]+/providers/Microsoft\.CostManagement') {
-                Set-CostAccessIssue -Response $resp -StatusCode $resp.StatusCode
+            # cost still works - it must NOT trip any breaker.
+            #
+            # At SUBSCRIPTION scope, track access per-subscription. In a
+            # mixed-RBAC tenant a denial on one sub says nothing about the next,
+            # so mark only that sub denied and keep going. The global breaker is
+            # reserved for a genuine tenant-wide block: an explicit EA/MCA
+            # billing-policy error, or a long run of consecutive denials with
+            # zero successes (which would otherwise become a 429 throttle storm).
+            if ($Path -match '/subscriptions/([^/]+)/providers/Microsoft\.CostManagement') {
+                $subScopeId = $Matches[1]
+                if ($resp.StatusCode -in @(401, 403)) {
+                    if ($script:costDeniedSubs) { [void]$script:costDeniedSubs.Add($subScopeId) }
+
+                    $policyBlock = $false
+                    if ($resp.Content) {
+                        try { $em = ($resp.Content | ConvertFrom-Json).error.message } catch { $em = '' }
+                        if ($em -match 'AO View Charges|DA View Charges|account owner|enrollment') { $policyBlock = $true }
+                    }
+
+                    if ($policyBlock) {
+                        # Explicit billing-policy block - cost is off tenant-wide.
+                        Set-CostAccessIssue -Response $resp -StatusCode $resp.StatusCode
+                    }
+                    elseif ($script:costSuccessCount -eq 0) {
+                        # No subscription has returned cost yet. Count consecutive
+                        # denials; once enough fail with zero successes, treat it
+                        # as a tenant-wide block and stop hammering the API.
+                        $script:costDeniedStreak++
+                        if ($script:costDeniedStreak -ge 8) {
+                            Set-CostAccessIssue -Response $resp -StatusCode $resp.StatusCode
+                        }
+                    }
+                }
+                elseif ($resp.StatusCode -eq 200) {
+                    $script:costSuccessCount++
+                    $script:costDeniedStreak = 0
+                }
             }
             return $resp
         }
@@ -294,6 +340,15 @@ function Resolve-CostMgId {
 # and the UI shows the user how to fix it.
 $script:costAccessIssue = $null
 
+# -- Per-Subscription Cost-Access Tracking --------------------------------
+# In a mixed-RBAC tenant you may hold Cost Management Reader on some
+# subscriptions but not others. These track which subs denied cost (skip only
+# those), how many returned cost successfully, and the consecutive-denial
+# streak used to detect a genuine tenant-wide block.
+$script:costDeniedSubs   = [System.Collections.Generic.HashSet[string]]::new()
+$script:costSuccessCount = 0
+$script:costDeniedStreak = 0
+
 function Set-CostAccessIssue {
     param(
         [object]$Response,
@@ -436,7 +491,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.6.0'
+$script:AppVersion = '2.7.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -706,6 +761,11 @@ function Populate-OverviewTab {
             default { "Cost data is unavailable due to a billing access restriction. Contact your billing administrator to enable Cost Management access. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data" }
         }
         $script:CostAccessWarningText.Text = $warningMsg
+        $script:CostAccessWarning.Visibility = 'Visible'
+    }
+    elseif ($script:costDeniedSubs -and $script:costDeniedSubs.Count -gt 0) {
+        $deniedCount = $script:costDeniedSubs.Count
+        $script:CostAccessWarningText.Text = "Cost data was unavailable for $deniedCount subscription(s) where you lack the Cost Management Reader role. Cost figures reflect only the subscriptions you can access; all non-cost findings (idle/orphaned resources, Advisor recommendations, governance, security) are complete. To include the missing subscriptions, ask a billing or subscription owner to grant Cost Management Reader. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data"
         $script:CostAccessWarning.Visibility = 'Visible'
     }
     else {
@@ -5094,6 +5154,9 @@ $script:ScanButton.Add_Click({
         $script:GovTenantButton.IsEnabled = $false
         $script:ExportButton.IsEnabled = $false
         $script:costAccessIssue = $null
+        if ($script:costDeniedSubs) { $script:costDeniedSubs.Clear() }
+        $script:costSuccessCount = 0
+        $script:costDeniedStreak = 0
         $script:currentStage = 0
         $script:scanCancelled = $false
         $script:scanTimer.Start()

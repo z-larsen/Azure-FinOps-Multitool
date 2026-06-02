@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.6.0](https://img.shields.io/badge/Version-2.6.0-brightgreen)
+![Version 2.7.0](https://img.shields.io/badge/Version-2.7.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,13 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.7.0
+
+**Reliability:**
+- **Per-subscription cost-access handling** — in a tenant where you hold Cost Management Reader on some subscriptions but not others, the scanner now skips only the subscriptions that actually deny cost access and keeps collecting cost data for every subscription you *can* read. Previously the first subscription-scope denial tripped a global circuit breaker that abandoned cost queries for the entire tenant, so subscriptions you had access to were silently dropped.
+- **Smarter tenant-wide block detection** — the global cost circuit breaker (which exists to prevent a 429 throttle storm when cost is blocked everywhere) now trips only on an explicit EA/MCA billing-policy error or after a run of consecutive denials with zero successes, rather than on the first denial. This preserves the fast-fail protection for genuinely blocked tenants without penalizing mixed-RBAC tenants.
+- **Partial-coverage banner** — when some subscriptions are skipped for lack of Cost Management Reader, the Overview tab now shows an informational banner naming how many were skipped and clarifying that all non-cost findings remain complete.
 
 ### v2.6.0
 
