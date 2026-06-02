@@ -52,6 +52,17 @@ function Get-PlainAccessToken {
 $script:RunspacePool = [runspacefactory]::CreateRunspacePool(1, 6)
 $script:RunspacePool.Open()
 
+# -- Friendly throttle messages --------------------------------------------
+# While waiting out a 429 rate limit, show a rotating, friendly status
+# instead of a technical "throttled" notice. Shared by all retry paths.
+$script:ThrottleMsgIndex = 0
+function Get-NextThrottleMessage {
+    $msgs = @('Crunching numbers......', 'Fetching numbers......', 'Organizing costs......')
+    $msg = $msgs[$script:ThrottleMsgIndex % $msgs.Count]
+    $script:ThrottleMsgIndex++
+    return $msg
+}
+
 function Invoke-AzRestMethodWithRetry {
     param(
         [string]$Path,
@@ -231,11 +242,12 @@ function Invoke-AzRestMethodWithRetry {
         else {
             $retryAfter = [math]::Min(10 * [math]::Pow(2, $attempt), 60)
         }
-        Write-Host "  [429 Throttled] Waiting $($retryAfter)s before retry ($($attempt+1)/$MaxRetries)..." -ForegroundColor Yellow
+        $friendly = Get-NextThrottleMessage
+        Write-Host "  $friendly" -ForegroundColor Yellow
 
         # Update status bar if available
         if (Get-Command Update-ScanStatus -ErrorAction SilentlyContinue) {
-            Update-ScanStatus "Rate limited - waiting $($retryAfter)s before retry ($($attempt+1)/$MaxRetries)..."
+            Update-ScanStatus $friendly
         }
 
         # Dispatcher-friendly wait: DispatcherFrame nested message loop
@@ -516,9 +528,10 @@ function Search-AzGraphSafe {
 
         # 429 retry with DispatcherFrame wait
         $retryAfter = [math]::Min(10 * [math]::Pow(2, $attempt), 30)
-        Write-Host "  [429 Throttled - Resource Graph] Waiting $($retryAfter)s before retry ($($attempt+1)/$MaxRetries)..." -ForegroundColor Yellow
+        $friendly = Get-NextThrottleMessage
+        Write-Host "  $friendly" -ForegroundColor Yellow
         if (Get-Command Update-ScanStatus -ErrorAction SilentlyContinue) {
-            Update-ScanStatus "Resource Graph rate limited - waiting $($retryAfter)s..."
+            Update-ScanStatus $friendly
         }
         $waitEnd = (Get-Date).AddSeconds($retryAfter)
         while ((Get-Date) -lt $waitEnd) {
@@ -535,7 +548,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.11.2'
+$script:AppVersion = '2.11.3'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -3464,7 +3477,9 @@ function Populate-BudgetsTab {
     if ($d.Budgets -and $d.Budgets.HasData -and -not $script:budgetHistoryLoaded) {
         $script:BudgetHistoryStatus.Text = 'Loading budget history (last 6 months)...'
         try {
-            $script:budgetHistory = Get-BudgetHistory -Budgets $d.Budgets.Budgets -MonthsBack 6
+            # Reuse Cost Trend's already-fetched monthly spend (if available) so
+            # Budget History doesn't re-hit the throttle-prone Cost Management API.
+            $script:budgetHistory = Get-BudgetHistory -Budgets $d.Budgets.Budgets -MonthsBack 6 -CostTrend $d.CostTrend
             $script:budgetHistoryLoaded = $true
             Update-BudgetHistoryView
         } catch {

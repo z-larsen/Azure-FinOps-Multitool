@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.11.2](https://img.shields.io/badge/Version-2.11.2-brightgreen)
+![Version 2.11.3](https://img.shields.io/badge/Version-2.11.3-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,14 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.11.3
+
+**Changed — friendly rotating status while waiting out rate limits:**
+- When the scan hits a 429 throttle and waits to retry, the status now rotates through `Crunching numbers......`, `Fetching numbers......`, and `Organizing costs......` instead of showing a technical `[429 Throttled] Waiting Xs before retry` notice. Applies to both the Cost Management REST and Resource Graph retry paths, in the CLI live output and the GUI status bar. The underlying backoff/retry timing is unchanged.
+
+**Fixed — Budget History returning empty under throttling:**
+- Budget History re-queried the same heavily throttled Cost Management endpoint that Cost Data and Cost Trend had just drained, so it 429'd through every retry and returned no rows (surfacing as a misleading "permissions" panel). It now reuses Cost Trend's already-fetched per-subscription monthly spend when available and only falls back to a live query when that data is missing, eliminating the redundant throttled calls.
 
 ### v2.11.2
 
