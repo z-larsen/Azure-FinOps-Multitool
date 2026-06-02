@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.4.1](https://img.shields.io/badge/Version-2.4.1-brightgreen)
+![Version 2.5.0](https://img.shields.io/badge/Version-2.5.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.5.0
+
+**Performance:**
+- **Single-call cost trend** — the 6-month cost trend now issues a single management-group query grouped by `SubscriptionId`, returning the full month-by-subscription matrix (aggregate totals and the per-subscription dropdown data) in one response instead of looping once per subscription. On large tenants this collapses dozens of Cost Management calls into one and eliminates the per-subscription fan-out that dominated trend runtime.
+- **Single-subscription fast path** — when only one subscription is in scope, `Get-CostTrend` skips management-group resolution entirely and queries the subscription scope directly, avoiding the throttle-prone MG candidate probing that could add minutes of retry/backoff. The per-subscription loop is retained only as a fallback when MG-scope cost access is unavailable.
 
 ### v2.4.1
 
