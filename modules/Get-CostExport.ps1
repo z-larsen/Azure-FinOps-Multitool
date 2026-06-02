@@ -62,6 +62,59 @@ function Invoke-StorageBlobRest {
     }
 }
 
+# -- Flat blob listing under a prefix -------------------------------------
+# Lists every blob under $Prefix (no delimiter = recursive). Robust to two
+# quirks: (1) Invoke-RestMethod often returns the list XML as a raw string
+# (with a UTF-8 BOM) instead of an XmlDocument, so parse defensively; and
+# (2) follows NextMarker so large accounts are not silently truncated.
+function Get-StorageBlobList {
+    param(
+        [Parameter(Mandatory)][string]$BlobBase,
+        [Parameter(Mandatory)][string]$Container,
+        [string]$Prefix = '',
+        [string]$StorageToken
+    )
+    $out    = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $marker = $null
+    $listed = $false
+    do {
+        $listUri = "$BlobBase/$Container`?restype=container&comp=list"
+        if ($Prefix) { $listUri += "&prefix=$([uri]::EscapeDataString($Prefix))" }
+        if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
+        $resp = Invoke-StorageBlobRest -Uri $listUri -StorageToken $StorageToken
+        if (-not $resp) { break }
+        $listed = $true
+
+        # Normalize the response into an XmlDocument.
+        $doc = $null
+        if ($resp -is [System.Xml.XmlDocument]) {
+            $doc = $resp
+        }
+        elseif ($resp -is [string]) {
+            $txt = $resp
+            $i = $txt.IndexOf('<?xml')
+            if ($i -lt 0) { $i = $txt.IndexOf('<EnumerationResults') }
+            if ($i -gt 0) { $txt = $txt.Substring($i) }
+            try { $doc = New-Object System.Xml.XmlDocument; $doc.LoadXml($txt) } catch { $doc = $null }
+        }
+        if (-not $doc -or -not $doc.EnumerationResults) { break }
+
+        $nodes = @()
+        if ($doc.EnumerationResults.Blobs -and $doc.EnumerationResults.Blobs.Blob) {
+            $nodes = @($doc.EnumerationResults.Blobs.Blob)
+        }
+        foreach ($b in $nodes) {
+            $lm = $null
+            if ($b.Properties.'Last-Modified') { try { $lm = [datetime]$b.Properties.'Last-Modified' } catch { } }
+            [void]$out.Add([PSCustomObject]@{ Name = $b.Name; LastModified = $lm })
+        }
+        $marker = $null
+        if ($doc.EnumerationResults.NextMarker) { $marker = ([string]$doc.EnumerationResults.NextMarker).Trim() }
+    } while ($marker)
+
+    return [PSCustomObject]@{ Blobs = $out; Listed = $listed }
+}
+
 # -- Decompress a gzip blob body into CSV text ----------------------------
 # Newer Cost Management exports can write '.csv.gz' parts. Invoke-RestMethod
 # hands these back as bytes (or a mojibake string); gunzip into UTF-8 text.
@@ -232,39 +285,52 @@ function Get-CostExportData {
     $blobBase  = "https://$account.$suffix"
     $container = $Export.Container
     $root      = ($Export.RootFolder).Trim('/')
-    $prefix    = if ($root) { "$root/$($Export.Name)/" } else { "$($Export.Name)/" }
 
     $token = $null
     try { $token = Get-PlainAccessToken -ResourceUrl 'https://storage.azure.com' }
     catch { Write-Warning "  Storage token error: $($_.Exception.Message)"; return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD' } }
 
-    # List blobs under the export folder
-    $listUri = "$blobBase/$container`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($prefix))"
-    $xml = Invoke-StorageBlobRest -Uri $listUri -StorageToken $token
-    if (-not $xml) {
+    # Export layouts vary:
+    #   Standard Cost Management export : {root}/{name}/{dateRange}/{runId}/*.csv
+    #   FinOps Hub (manifest) export    : subscriptions/{subId}/{name}/{dateRange}/{runTs}/{runId}/*.csv
+    # Try progressively looser prefixes until CSV data blobs are found. The
+    # subscription-scoped path is tried first so we don't accidentally pick up
+    # a different export's data from a whole-container scan.
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($Export.SubId) { [void]$candidates.Add("subscriptions/$($Export.SubId)/$($Export.Name)/") }
+    if ($root) {
+        [void]$candidates.Add("$root/$($Export.Name)/")
+        [void]$candidates.Add("$root/")
+    }
+    [void]$candidates.Add("$($Export.Name)/")
+    [void]$candidates.Add('')
+
+    $blobs      = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $csvBlobs   = @()
+    $usedPrefix = $null
+    $anyListed  = $false
+    $seen       = @{}
+    foreach ($prefix in $candidates) {
+        if ($seen.ContainsKey($prefix)) { continue }
+        $seen[$prefix] = $true
+
+        $listed = Get-StorageBlobList -BlobBase $blobBase -Container $container -Prefix $prefix -StorageToken $token
+        if ($listed.Listed) { $anyListed = $true }
+        $blobs = $listed.Blobs
+
+        $csvBlobs = @($blobs | Where-Object { $_.Name -match '\.csv(\.gz)?$' })
+        if ($csvBlobs.Count -gt 0) { $usedPrefix = $prefix; break }
+    }
+
+    if (-not $anyListed) {
         Write-Warning "  Could not list export blobs (storage access denied? needs Storage Blob Data Reader)."
         return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; AccessDenied = $true }
     }
 
-    # Collect blob entries (name + last-modified). Invoke-RestMethod returns
-    # XML as an object graph; normalize to a flat list.
-    $blobs = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $nodes = $null
-    if ($xml.EnumerationResults -and $xml.EnumerationResults.Blobs -and $xml.EnumerationResults.Blobs.Blob) {
-        $nodes = @($xml.EnumerationResults.Blobs.Blob)
-    }
-    foreach ($b in $nodes) {
-        $lm = $null
-        if ($b.Properties.'Last-Modified') { try { $lm = [datetime]$b.Properties.'Last-Modified' } catch { } }
-        [void]$blobs.Add([PSCustomObject]@{ Name = $b.Name; LastModified = $lm })
-    }
-
-    # CSV (optionally gzip-compressed) data files only; pick newest run folder
-    $csvBlobs = @($blobs | Where-Object { $_.Name -match '\.csv(\.gz)?$' })
     if ($csvBlobs.Count -eq 0) {
         $hasParquet = @($blobs | Where-Object { $_.Name -match '\.parquet$' }).Count -gt 0
         $reason = if ($hasParquet) { 'Export writes Parquet, not CSV. Recreate the export with CSV format.' }
-        else { "No CSV data blobs found under '$prefix'." }
+        else { "No CSV data blobs found for export '$($Export.Name)' in container '$container'." }
         Write-Warning "  $reason"
         return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; Unsupported = $hasParquet; Reason = $reason; NoData = $true }
     }

@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.11.0](https://img.shields.io/badge/Version-2.11.0-brightgreen)
+![Version 2.11.1](https://img.shields.io/badge/Version-2.11.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.11.1
+
+**Fixed — Cost Export Scan now reads FinOps Hub exports ($0 / empty Resources by Spend):**
+- **Blob listing returned nothing for FinOps Hub exports**, so the cost tabs showed $0 everywhere and "Resources by Spend" was empty. Two causes: (1) the storage list response often comes back as a raw string (with a UTF-8 BOM) rather than parsed XML, so the blob enumeration silently found zero blobs at every prefix; and (2) a FinOps Hub writes data to `subscriptions/{subId}/{export}/{dateRange}/{run}/*.csv`, a path the reader never tried.
+- **The fix:** added a dedicated flat blob-list helper that normalizes the response to XML (strips the BOM) and follows `NextMarker` pagination so large accounts aren't truncated, and added the subscription-scoped path as the first prefix candidate (tried before any whole-container fallback so it can't pick up a different export's data). Validated against a live FinOps Hub FOCUS export — costs, forecast, and per-resource spend now populate correctly.
 
 ### v2.11.0
 
