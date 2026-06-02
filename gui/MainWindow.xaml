@@ -118,7 +118,7 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
-                        <TextBlock x:Name="VersionLabel" Text="v2.11.1" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                        <TextBlock x:Name="VersionLabel" Text="v2.11.2" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
                     </StackPanel>
                     <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
@@ -795,7 +795,7 @@
                             </TextBlock>
                             <Border Background="#FFF4CE" BorderBrush="#E6C200" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,16">
                                 <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#5A4A00">
-                                    <Run Text="Tip:" FontWeight="Bold"/><Run Text=" If you don't have an export yet, the easiest path is to click "/><Run Text="🚀 Cost Export Scan" FontWeight="SemiBold"/><Run Text=" on the toolbar — when no export is found, the tool offers to create a daily CSV export for you. The steps below explain the permissions and options, including private / firewalled storage."/>
+                                    <Run Text="Tip:" FontWeight="Bold"/><Run Text=" If you don't have an export yet, the easiest path is to click "/><Run Text="Cost Export Scan" FontWeight="SemiBold"/><Run Text=" on the toolbar — when no export is found, the tool offers to create a daily CSV export for you. The steps below explain the permissions and options, including private / firewalled storage."/>
                                 </TextBlock>
                             </Border>
 
@@ -826,7 +826,7 @@
                                     <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,4">
                                         <Run Text="Option A — Let this tool create it (recommended):" FontWeight="SemiBold"/>
                                     </TextBlock>
-                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,8" Text="Click 🚀 Cost Export Scan. If no readable export exists, pick a storage account and the tool creates a daily Month-to-date CSV export, partitioned for large datasets."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="12,0,0,8" Text="Click Cost Export Scan. If no readable export exists, pick a storage account and the tool creates a daily Month-to-date CSV export, partitioned for large datasets."/>
                                     <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,4">
                                         <Run Text="Option B — Azure portal:" FontWeight="SemiBold"/>
                                     </TextBlock>
@@ -873,7 +873,7 @@
                             <TextBlock Text="Step 4 — Run the Export Scan" Style="{StaticResource SectionHeader}" Foreground="#D83B01" FontSize="15"/>
                             <Border Background="#FDF6F3" BorderBrush="#F0D8CC" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
                                 <StackPanel>
-                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="0,0,0,4" Text="Once the first run has landed, click 🚀 Cost Export Scan, confirm the detected export and its date in the prompt, and the cost tabs populate from the export. Governance and resource-graph checks still run live for freshness."/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444" Margin="0,0,0,4" Text="Once the first run has landed, click Cost Export Scan, confirm the detected export and its date in the prompt, and the cost tabs populate from the export. Governance and resource-graph checks still run live for freshness."/>
                                     <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#444">
                                         <Run Text="This tool reads "/><Run Text="CSV" FontWeight="SemiBold"/><Run Text=" exports only (classic and FOCUS schemas). If you only have a Parquet export, create a CSV one — the Cost Export Scan button will offer to do this."/>
                                     </TextBlock>

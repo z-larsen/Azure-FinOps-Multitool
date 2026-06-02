@@ -72,6 +72,35 @@ function Get-CostTrend {
         dataset   = $groupedDataset
     } | ConvertTo-Json -Depth 10
 
+    # Helper: run a Cost Management query and follow nextLink pagination.
+    # Monthly responses are capped (~1000 rows) and ordered newest-first, so a
+    # tenant with enough subscriptions (months x subs > one page) would return
+    # only the latest month or two on page 1. Without following nextLink the
+    # 6-month trend collapses to "current + previous month". Accumulate every
+    # page so the full window is returned regardless of subscription count.
+    function Invoke-CostQueryPaged {
+        param([string]$Path, [string]$Payload)
+        $allRows = [System.Collections.Generic.List[object]]::new()
+        $cols    = $null
+        $curPath = $Path
+        $page    = 0
+        while ($curPath -and $page -lt 50) {
+            $page++
+            $resp = Invoke-AzRestMethodWithRetry -Path $curPath -Method POST -Payload $Payload
+            if ($resp.StatusCode -ne 200) {
+                return [PSCustomObject]@{ StatusCode = $resp.StatusCode; Columns = $cols; Rows = $allRows }
+            }
+            $r = $resp.Content | ConvertFrom-Json
+            if (-not $cols) { $cols = $r.properties.columns }
+            if ($r.properties.rows) {
+                foreach ($row in $r.properties.rows) { [void]$allRows.Add($row) }
+            }
+            $next = $r.properties.nextLink
+            $curPath = if ($next) { ([uri]$next).PathAndQuery } else { $null }
+        }
+        return [PSCustomObject]@{ StatusCode = 200; Columns = $cols; Rows = $allRows }
+    }
+
     # Helper: parse cost query rows into month entries
     function Parse-CostRows {
         param($Rows, $Columns)
@@ -196,15 +225,14 @@ function Get-CostTrend {
         if ($subCount -eq 1) {
             $only = $Subscriptions[0]
             $subPath = "/subscriptions/$($only.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-            $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
-            if ($subResp.StatusCode -eq 200) {
-                $subResult = ($subResp.Content | ConvertFrom-Json)
-                if ($subResult.properties.rows) {
-                    $months = Parse-CostRows -Rows $subResult.properties.rows -Columns $subResult.properties.columns
+            $paged = Invoke-CostQueryPaged -Path $subPath -Payload $body
+            if ($paged.StatusCode -eq 200) {
+                if ($paged.Rows.Count -gt 0) {
+                    $months = Parse-CostRows -Rows $paged.Rows -Columns $paged.Columns
                     $bySubscription[$only.Id] = @($months | Sort-Object MonthDate)
                 }
             } else {
-                Write-Warning "  Single-sub cost trend returned HTTP $($subResp.StatusCode)"
+                Write-Warning "  Single-sub cost trend returned HTTP $($paged.StatusCode)"
             }
         }
         else {
@@ -220,17 +248,16 @@ function Get-CostTrend {
 
             if ($useMgScope) {
                 $mgPath = "/providers/Microsoft.Management/managementGroups/$mgScopeId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                $response = Invoke-AzRestMethodWithRetry -Path $mgPath -Method POST -Payload $groupedBody
-                if ($response.StatusCode -eq 200) {
-                    $result = ($response.Content | ConvertFrom-Json)
-                    if ($result.properties.rows) {
-                        $entries = Parse-GroupedCostRows -Rows $result.properties.rows -Columns $result.properties.columns
+                $paged = Invoke-CostQueryPaged -Path $mgPath -Payload $groupedBody
+                if ($paged.StatusCode -eq 200) {
+                    if ($paged.Rows.Count -gt 0) {
+                        $entries = Parse-GroupedCostRows -Rows $paged.Rows -Columns $paged.Columns
                         Set-TrendFromGrouped -Entries $entries
                         $groupedOk = ($months.Count -gt 0)
                     }
                 } else {
-                    if ($response.StatusCode -in @(401, 403)) { Set-MgCostScopeFailed }
-                    Write-Warning "  MG-scope grouped cost trend returned HTTP $($response.StatusCode) - falling back to per-sub"
+                    if ($paged.StatusCode -in @(401, 403)) { Set-MgCostScopeFailed }
+                    Write-Warning "  MG-scope grouped cost trend returned HTTP $($paged.StatusCode) - falling back to per-sub"
                     $useMgScope = $false
                 }
             }
@@ -251,12 +278,11 @@ function Get-CostTrend {
                     }
 
                     $subPath = "/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                    $subResp = Invoke-AzRestMethodWithRetry -Path $subPath -Method POST -Payload $body
+                    $paged = Invoke-CostQueryPaged -Path $subPath -Payload $body
 
-                    if ($subResp.StatusCode -eq 200) {
-                        $subResult = ($subResp.Content | ConvertFrom-Json)
-                        if ($subResult.properties.rows) {
-                            $subMonths = Parse-CostRows -Rows $subResult.properties.rows -Columns $subResult.properties.columns
+                    if ($paged.StatusCode -eq 200) {
+                        if ($paged.Rows.Count -gt 0) {
+                            $subMonths = Parse-CostRows -Rows $paged.Rows -Columns $paged.Columns
                             $bySubscription[$sub.Id] = @($subMonths | Sort-Object MonthDate)
 
                             foreach ($sm in $subMonths) {

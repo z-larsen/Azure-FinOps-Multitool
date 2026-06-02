@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.11.1](https://img.shields.io/badge/Version-2.11.1-brightgreen)
+![Version 2.11.2](https://img.shields.io/badge/Version-2.11.2-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,15 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.11.2
+
+**Fixed — 6-month cost trend collapsing to the last two months after a month rollover:**
+- **The rolling trend chart (GUI and automated report) silently shrank to just the current + previous month** once a tenant had enough subscriptions. Cost Management Monthly responses are capped (~1000 rows) and ordered newest-month-first, so a management-group-scope query grouped by `SubscriptionId` returned only the latest month or two on the first page. The reader never followed the `nextLink` continuation token, so all earlier months were dropped and the aggregate collapsed to "current + previous month" — matching the symptom of the trend appearing to restart at month-rollover.
+- **The fix:** added an `Invoke-CostQueryPaged` helper that follows `properties.nextLink` across every page and accumulates all rows before parsing, wired into the single-sub, management-group grouped, and per-subscription fallback query paths. Harmless when no continuation token is present (single-subscription tenants are unaffected). The full 6-month window now renders regardless of subscription count.
+
+**Changed — removed rocket emojis from the Export Setup tab:**
+- Cleaned up the three `🚀 Cost Export Scan` references in the Export Setup help text so they match the plain `Cost Export Scan` toolbar button.
 
 ### v2.11.1
 
