@@ -94,7 +94,11 @@ function Get-BudgetStatus {
                         $pctForecast = if ($amount -gt 0) { [math]::Round(($forecast / $amount) * 100, 1) } else { 0 }
 
                         # Risk level
-                        $risk = if ($pctForecast -gt 100) { 'Over Budget' }
+                        # 'Over Budget' means actual spend has already exceeded the budget.
+                        # 'Forecast Over' means actual is still within budget but the
+                        # month-end forecast is projected to exceed it (early warning).
+                        $risk = if ($pctUsed -gt 100) { 'Over Budget' }
+                                elseif ($pctForecast -gt 100) { 'Forecast Over' }
                                 elseif ($pctForecast -gt 90) { 'At Risk' }
                                 elseif ($pctForecast -gt 75) { 'Watch' }
                                 else { 'On Track' }
@@ -167,8 +171,10 @@ function Get-BudgetStatus {
     }
 
     # Count risk levels
+    # OverBudgetCount = actual spend already exceeded budget (urgent / red).
+    # AtRiskCount = forecast-driven warnings (projected over, or trending high).
     $overBudget = @($budgets | Where-Object { $_.Risk -eq 'Over Budget' }).Count
-    $atRisk     = @($budgets | Where-Object { $_.Risk -eq 'At Risk' }).Count
+    $atRisk     = @($budgets | Where-Object { $_.Risk -in @('Forecast Over', 'At Risk') }).Count
 
     return [PSCustomObject]@{
         Budgets             = @($budgets)
@@ -247,21 +253,24 @@ function Get-BudgetHistory {
             $monthlyCosts = @{}
             foreach ($row in $result.properties.rows) {
                 $cost = [math]::Round([double]$row[$costIdx], 2)
-                $dateVal = $row[$dateIdx].ToString()
-                # Parse date — API may return YYYYMMDD integer, YYYY-MM-DDTHH:mm:ss, or other formats
-                $dateClean = $dateVal -replace '[^0-9\-]', ''
-                if ($dateClean.Length -ge 8 -and $dateClean -notmatch '-') {
-                    # Pure digits like 20251100 or 20251101
-                    $monthKey = "$($dateClean.Substring(0,4))-$($dateClean.Substring(4,2))"
-                } elseif ($dateVal -match '(\d{4})-(\d{2})') {
-                    # ISO format like 2025-11-01T00:00:00
-                    $monthKey = "$($Matches[1])-$($Matches[2])"
+                $rawDate = $row[$dateIdx]
+                # Parse date robustly — API may return a [datetime], a YYYYMMDD
+                # integer (e.g. 20260101), or a locale-formatted string
+                # (e.g. "1/1/2026 12:00:00 AM"). Avoid substring slicing, which
+                # mangles non-ISO date formats and zeroes out actual spend.
+                $parsed = $null
+                if ($rawDate -is [datetime]) {
+                    $parsed = $rawDate
                 } else {
-                    try {
-                        $parsed = [datetime]::Parse($dateVal)
-                        $monthKey = $parsed.ToString('yyyy-MM')
-                    } catch { continue }
+                    $dateStr = "$rawDate"
+                    $digitsOnly = $dateStr -replace '[^0-9]', ''
+                    if ($digitsOnly.Length -eq 8 -and $dateStr -notmatch '[/\-:]') {
+                        $parsed = [datetime]::ParseExact($digitsOnly, 'yyyyMMdd', $null)
+                    } else {
+                        try { $parsed = [datetime]::Parse($dateStr) } catch { continue }
+                    }
                 }
+                $monthKey = $parsed.ToString('yyyy-MM')
                 $monthlyCosts[$monthKey] = $cost
             }
 

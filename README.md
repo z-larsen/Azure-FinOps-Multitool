@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.4.0](https://img.shields.io/badge/Version-2.4.0-brightgreen)
+![Version 2.4.1](https://img.shields.io/badge/Version-2.4.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,11 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.4.1
+
+**Bug fixes:**
+- **Throttle-resilient cost-scope resolution** — in tenants where Cost Management access lives on a child management group (common with delegated/EA customer tenants), a 429-throttled probe at the tenant root no longer abandons discovery before reaching the child MG. The resolver now probes the management groups the caller can actually see first, falls back to the tenant root last, continues past throttled/forbidden candidates instead of stopping, and uses a low per-probe retry budget so a throttled scope fails fast. This prevents an incorrect fallback to slower per-subscription cost queries when valid MG-scope access exists.
 
 ### v2.4.0
 

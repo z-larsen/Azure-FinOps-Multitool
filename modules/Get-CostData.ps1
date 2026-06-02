@@ -25,8 +25,10 @@ function Get-CostData {
 
     $costMap = @{}
 
-    # Skip MG-scope if a prior module already detected it's unavailable
-    if (-not (Test-MgCostScope)) {
+    # Resolve the management-group scope we can actually query for cost.
+    # Falls back to per-subscription if no accessible MG returns cost data.
+    $mgScopeId = Resolve-CostMgId -TenantId $TenantId
+    if (-not $mgScopeId) {
         Write-Host "  Querying actual costs (per-subscription)..." -ForegroundColor Cyan
         return Get-CostDataPerSubscription -Subscriptions $Subscriptions
     }
@@ -48,12 +50,20 @@ function Get-CostData {
             }
         } | ConvertTo-Json -Depth 10
 
-        $mgPath = "/providers/Microsoft.Management/managementGroups/$TenantId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+        $mgPath = "/providers/Microsoft.Management/managementGroups/$mgScopeId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
         $response = Invoke-AzRestMethodWithRetry -Path $mgPath -Method POST -Payload $actualBody
 
         if ($response.StatusCode -in @(401, 403)) {
+            # 401/403 at the MG scope usually just means no cost role at the
+            # tenant-root management group (a scope gap), NOT a tenant-wide
+            # denial - per-subscription cost may still work. Skip MG for the
+            # rest of the scan and fall back to per-subscription. If cost is
+            # truly denied everywhere, the per-sub path trips the circuit
+            # breaker (via the retry wrapper) and the UI banner explains it.
             Set-MgCostScopeFailed
-            throw "MG-scope cost query returned HTTP $($response.StatusCode). Falling back to per-subscription."
+            Write-Warning "MG-scope cost unavailable (HTTP $($response.StatusCode)). Falling back to per-subscription queries."
+            $costMap = Get-CostDataPerSubscription -Subscriptions $Subscriptions
+            return $costMap
         }
         if ($response.StatusCode -ne 200) {
             throw "MG-scope cost query returned HTTP $($response.StatusCode). Falling back to per-subscription."
@@ -110,7 +120,7 @@ function Get-CostData {
             includeFreshPartialCost = $false
         } | ConvertTo-Json -Depth 10
 
-        $forecastPath = "/providers/Microsoft.Management/managementGroups/$TenantId/providers/Microsoft.CostManagement/forecast?api-version=2023-11-01"
+        $forecastPath = "/providers/Microsoft.Management/managementGroups/$mgScopeId/providers/Microsoft.CostManagement/forecast?api-version=2023-11-01"
         $fResponse = Invoke-AzRestMethodWithRetry -Path $forecastPath -Method POST -Payload $forecastBody
 
         if ($fResponse.StatusCode -ne 200) {

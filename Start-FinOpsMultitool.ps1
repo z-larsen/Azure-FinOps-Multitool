@@ -60,6 +60,18 @@ function Invoke-AzRestMethodWithRetry {
         [int]$MaxRetries = 3,
         [int]$TimeoutSeconds = 60
     )
+
+    # Circuit breaker: once cost access is known to be denied tenant-wide, do
+    # not call the (already throttled) Cost Management API again. Return a
+    # synthetic 403 immediately so cost modules skip cleanly instead of looping.
+    if ($script:costAccessIssue -and $Path -match 'Microsoft\.CostManagement') {
+        return [PSCustomObject]@{
+            StatusCode = 403
+            Content    = '{"error":{"message":"Cost access unavailable (skipped to avoid throttling)."}}'
+            Headers    = @{}
+        }
+    }
+
     for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
         $ps = [powershell]::Create()
         $ps.RunspacePool = $script:RunspacePool
@@ -123,7 +135,21 @@ function Invoke-AzRestMethodWithRetry {
             $resp = [PSCustomObject]@{ StatusCode = $resp.StatusCode; Content = '{}'; Headers = if ($resp.Headers) { $resp.Headers } else { @{} } }
         }
 
-        if ($resp.StatusCode -ne 429) { return $resp }
+        if ($resp.StatusCode -ne 429) {
+            # Trip the cost-access breaker only on a denial at SUBSCRIPTION scope.
+            # A 401/403 at the management-group scope is usually just a missing
+            # cost role at the tenant root (a scope gap) where per-subscription
+            # cost still works - it must NOT trip the breaker. A denial at the
+            # subscription scope is a real tenant-wide block, so short-circuit the
+            # remaining cost calls to avoid a 429 throttle storm.
+            if ($resp.StatusCode -in @(401, 403) -and $Path -match '/subscriptions/[^/]+/providers/Microsoft\.CostManagement') {
+                Set-CostAccessIssue -Response $resp -StatusCode $resp.StatusCode
+            }
+            return $resp
+        }
+
+        # All retries exhausted - return the 429 without another wasted wait
+        if ($attempt -ge $MaxRetries) { break }
 
         # Parse Retry-After header or default to exponential backoff
         $retryAfter = 10
@@ -170,6 +196,130 @@ function Test-MgCostScope {
 function Set-MgCostScopeFailed {
     $script:MgCostScopeFailed = $true
     Write-Host "  MG-scope cost access unavailable for this tenant - all subsequent modules will use per-subscription queries" -ForegroundColor Yellow
+}
+
+# -- Shared Cost Management-Group Scope Resolver --------------------------
+# The tenant-root management group's id equals the tenant GUID, but many orgs
+# assign Cost Management Reader on a CHILD management group rather than the
+# hidden root. Blindly querying managementGroups/<tenantId> then returns 401.
+# This resolver probes every management group the caller can actually see
+# (cost access usually lives on a child MG, not the tenant root), then the
+# tenant root last, and caches the first scope that returns cost data. A
+# throttled (429) probe never aborts discovery. All cost modules call it so
+# the probe happens once per scan.
+$script:CostMgId = $null
+
+function Reset-CostMgScope {
+    $script:CostMgId = $null
+    $script:MgCostScopeFailed = $false
+}
+
+function Resolve-CostMgId {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TenantId
+    )
+
+    if ($script:MgCostScopeFailed) { return $null }
+    if ($script:CostMgId) { return $script:CostMgId }
+
+    # Candidates are the management groups the caller can actually see. Cost
+    # access usually lives on a child MG (not the tenant root), so probe the
+    # visible MGs first and fall back to the tenant root last. Forcing the
+    # (often inaccessible, heavily throttled) tenant root to the front is what
+    # caused a 429 there to abandon discovery before reaching the child MG
+    # where the cost role actually lives.
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        $listResp = Invoke-AzRestMethodWithRetry -Path '/providers/Microsoft.Management/managementGroups?api-version=2020-05-01' -Method GET
+        if ($listResp -and $listResp.StatusCode -eq 200) {
+            $mgs = ($listResp.Content | ConvertFrom-Json).value
+            foreach ($mg in @($mgs)) {
+                $name = $mg.name
+                if ($name -and -not $candidates.Contains($name)) {
+                    $candidates.Add($name)
+                }
+                if ($candidates.Count -ge 12) { break }
+            }
+        }
+    }
+    catch { }
+
+    # Tenant root as a last-resort candidate (covers orgs where the cost role
+    # is assigned at the root management group).
+    if (-not $candidates.Contains($TenantId)) {
+        $candidates.Add($TenantId)
+    }
+
+    $probeBody = @{
+        type      = 'ActualCost'
+        timeframe = 'MonthToDate'
+        dataset   = @{
+            granularity = 'None'
+            aggregation = @{ totalCost = @{ name = 'Cost'; function = 'Sum' } }
+        }
+    } | ConvertTo-Json -Depth 10
+
+    # Use a low retry budget per probe so a throttled candidate fails fast and
+    # we move on to the next one. The real cost queries keep the full budget.
+    foreach ($mgId in $candidates) {
+        $path = "/providers/Microsoft.Management/managementGroups/$mgId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+        $resp = Invoke-AzRestMethodWithRetry -Path $path -Method POST -Payload $probeBody -MaxRetries 2
+        if ($resp -and $resp.StatusCode -eq 200) {
+            $script:CostMgId = $mgId
+            if ($mgId -ne $TenantId) {
+                Write-Host "  Cost scope resolved to management group '$mgId' (no cost role on tenant root)" -ForegroundColor Green
+            }
+            else {
+                Write-Host "  Cost scope resolved to tenant-root management group" -ForegroundColor Green
+            }
+            return $mgId
+        }
+        # 401/403 = no cost role here; 429 = throttled; anything else = unusable
+        # at this scope. In every case, keep probing the remaining candidates so
+        # a throttled tenant-root probe never blocks reaching the child MG.
+    }
+
+    Set-MgCostScopeFailed
+    return $null
+}
+
+# -- Shared Cost-Access Circuit Breaker -----------------------------------
+# When the Cost Management API denies access (401/403) it is a tenant-wide
+# billing-policy restriction, not a per-subscription RBAC gap. Falling back
+# to per-subscription queries hits the exact same wall and only generates a
+# 429 throttle storm. The first denied cost call trips this flag; the retry
+# wrapper then short-circuits every later cost call so the scan finishes fast
+# and the UI shows the user how to fix it.
+$script:costAccessIssue = $null
+
+function Set-CostAccessIssue {
+    param(
+        [object]$Response,
+        [int]$StatusCode
+    )
+    if ($script:costAccessIssue) { return }
+
+    $errMsg = ''
+    if ($Response -and $Response.Content) {
+        try { $errMsg = ($Response.Content | ConvertFrom-Json).error.message } catch { $errMsg = '' }
+    }
+
+    if ($errMsg -match 'AO View Charges|DA View Charges|account owner|enrollment') {
+        $script:costAccessIssue = 'EA'
+    }
+    elseif ($StatusCode -eq 401) {
+        # A 401 at the Cost Management scope on an EA enrollment is almost always
+        # the "Account owners can view charges" (AO view charges) policy being off.
+        $script:costAccessIssue = 'EA'
+    }
+    else {
+        $script:costAccessIssue = 'MCA'
+    }
+
+    Set-MgCostScopeFailed
+    Write-Warning "  Cost access denied (HTTP $StatusCode). Skipping remaining cost queries to avoid API throttling - see the cost-access banner for how to enable it."
 }
 
 # -- Shared Helper: Search-AzGraphSafe ------------------------------------
@@ -545,16 +695,15 @@ function Populate-OverviewTab {
     if ($script:costAccessIssue) {
         $agreementType = if ($d.Contract -and $d.Contract[0].AgreementType) { $d.Contract[0].AgreementType } else { '' }
         $warningMsg = switch ($script:costAccessIssue) {
-            'EA' { "Cost data is unavailable. This EA enrollment has 'AO View Charges' disabled. An Enterprise Administrator must enable it in the Azure portal (Cost Management + Billing > Enrollment > Policies) for cost data to appear." }
+            'EA' { "Cost data is unavailable because this EA enrollment has 'Account owners can view charges' (AO view charges) disabled. An Enterprise Administrator must enable it: Azure portal > Cost Management + Billing > Billing scopes > select the billing account > Policies > set 'Account owners can view charges' (and 'Department admins can view charges') to On, then Save. Allow up to ~30 minutes to take effect. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data" }
             'MCA' {
                 if ($agreementType -eq 'MicrosoftPartnerAgreement') {
-                    "Cost data is unavailable. This subscription is managed by a CSP partner. The partner must enable Azure Cost Management access in Partner Center for cost data to appear."
+                    "Cost data is unavailable because this subscription is managed by a CSP partner. The partner must enable Azure Cost Management access in Partner Center (and release pricing) for cost data to appear. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data"
                 }
                 else {
-                    "Cost data is unavailable. Verify that your account has the Billing Profile Reader or Cost Management Reader role on the billing profile. For MCA subscriptions, cost access is controlled by billing RBAC, not subscription RBAC."
-                }
+                    "Cost data is unavailable. For MCA accounts, cost access is controlled by billing RBAC (not subscription RBAC). A Billing Profile Owner must grant your account the Billing Profile Reader or Cost Management Reader role on the billing profile, and ensure 'Azure charges' is enabled under the billing profile Policies. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data" }
             }
-            default { "Cost data is unavailable due to a billing access restriction. Contact your billing administrator." }
+            default { "Cost data is unavailable due to a billing access restriction. Contact your billing administrator to enable Cost Management access. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data" }
         }
         $script:CostAccessWarningText.Text = $warningMsg
         $script:CostAccessWarning.Visibility = 'Visible'
@@ -4455,7 +4604,7 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
             }
             else { $budgetTxt = 'No Budget' }
         }
-        $budgetClass = switch ($budgetTxt) { 'Over Budget' { 'status-warn' } 'At Risk' { 'status-warn' } 'On Track' { 'status-good' } default { 'text-muted' } }
+        $budgetClass = switch ($budgetTxt) { 'Over Budget' { 'status-warn' } 'Forecast Over' { 'status-warn' } 'At Risk' { 'status-warn' } 'On Track' { 'status-good' } default { 'text-muted' } }
 
         # Cost trend
         $trendTxt = '-'
@@ -4683,7 +4832,7 @@ footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-s
 "@)
         [void]$sb.Append("<table><tr><th>Subscription</th><th>Budget Name</th><th class=`"text-right`">Amount</th><th class=`"text-right`">Actual Spend</th><th class=`"text-right`">% Used</th><th>Risk</th></tr>")
         foreach ($b in $d.Budgets.Budgets | Sort-Object PctUsed -Descending) {
-            $riskCls = switch ($b.Risk) { 'Over Budget' { 'status-warn' } 'At Risk' { 'status-warn' } 'On Track' { 'status-good' } default { 'text-muted' } }
+            $riskCls = switch ($b.Risk) { 'Over Budget' { 'status-warn' } 'Forecast Over' { 'status-warn' } 'At Risk' { 'status-warn' } 'On Track' { 'status-good' } default { 'text-muted' } }
             [void]$sb.Append("<tr><td>$($esc::Escape($b.Subscription))</td><td>$($esc::Escape($b.BudgetName))</td>")
             [void]$sb.Append("<td class=`"text-right`">$sym$($b.Amount.ToString('N2'))</td><td class=`"text-right`">$sym$($b.ActualSpend.ToString('N2'))</td>")
             [void]$sb.Append("<td class=`"text-right`">$([math]::Round($b.PctUsed,1))%</td><td class=`"$riskCls`">$($b.Risk)</td></tr>")
@@ -4746,7 +4895,7 @@ $script:scanStages = @(
             if (-not $script:scanData.Auth) {
                 throw "No tenant selected. Click 'Commercial Tenant' or 'Gov Tenant' first."
             }
-            $script:MgCostScopeFailed = $false  # Reset MG-scope flag for fresh scan
+            Reset-CostMgScope  # Reset MG-scope flag + cached cost scope for fresh scan
             $envLabel = $script:scanData.Auth.Environment
             $script:TenantLabel.Text = "Tenant: $($script:scanData.Auth.TenantId)  |  $($script:scanData.Auth.AccountName)  |  $envLabel"
             if ($envLabel -eq 'AzureUSGovernment') {
