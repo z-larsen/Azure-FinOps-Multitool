@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.12.0](https://img.shields.io/badge/Version-2.12.0-brightgreen)
+![Version 2.12.1](https://img.shields.io/badge/Version-2.12.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.12.1
+
+**Changed — management group access denial no longer floods the console:**
+- When the signed-in identity lacks `Microsoft.Management` read/register access, `Get-AzManagementGroup` returns an authorization (403) error during the hierarchy load. The scanner already falls back to a flat subscription list, but it previously printed two yellow `WARNING` lines that dumped the full `EndInvoke` authorization exception.
+- **The fix:** the hierarchy loader now classifies the error and, for the expected permission case, drops to a single concise verbose line while keeping the flat-subscription fallback. Scan results are unchanged — only the noisy output is suppressed. Applies to both the GUI and CLI, which share the same module.
 
 ### v2.12.0
 
