@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.11.3](https://img.shields.io/badge/Version-2.11.3-brightgreen)
+![Version 2.11.4](https://img.shields.io/badge/Version-2.11.4-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,11 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.11.4
+
+**Changed — single status message while waiting out rate limits:**
+- During a 429 throttle wait the status now shows a single `Fetching numbers......` message instead of rotating through several phrases. The GUI status bar keeps the current subscription progress visible alongside it (for example `Fetching numbers...... 6/43 subscriptions`). The technical throttle notice remains suppressed and the underlying backoff/retry timing is unchanged.
 
 ### v2.11.3
 

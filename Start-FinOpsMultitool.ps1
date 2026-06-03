@@ -52,15 +52,12 @@ function Get-PlainAccessToken {
 $script:RunspacePool = [runspacefactory]::CreateRunspacePool(1, 6)
 $script:RunspacePool.Open()
 
-# -- Friendly throttle messages --------------------------------------------
-# While waiting out a 429 rate limit, show a rotating, friendly status
-# instead of a technical "throttled" notice. Shared by all retry paths.
-$script:ThrottleMsgIndex = 0
+# -- Friendly throttle message ---------------------------------------------
+# While waiting out a 429 rate limit, show a single friendly status instead
+# of a technical "throttled" notice. Shared by all retry paths. The GUI also
+# appends the current subscription progress (for example "6/43 subscriptions").
 function Get-NextThrottleMessage {
-    $msgs = @('Crunching numbers......', 'Fetching numbers......', 'Organizing costs......')
-    $msg = $msgs[$script:ThrottleMsgIndex % $msgs.Count]
-    $script:ThrottleMsgIndex++
-    return $msg
+    return 'Fetching numbers......'
 }
 
 function Invoke-AzRestMethodWithRetry {
@@ -245,9 +242,10 @@ function Invoke-AzRestMethodWithRetry {
         $friendly = Get-NextThrottleMessage
         Write-Host "  $friendly" -ForegroundColor Yellow
 
-        # Update status bar if available
+        # Update status bar if available - keep the subscription progress visible
         if (Get-Command Update-ScanStatus -ErrorAction SilentlyContinue) {
-            Update-ScanStatus $friendly
+            $statusMsg = if ($script:LastSubProgress) { "$friendly $script:LastSubProgress" } else { $friendly }
+            Update-ScanStatus $statusMsg
         }
 
         # Dispatcher-friendly wait: DispatcherFrame nested message loop
@@ -531,7 +529,8 @@ function Search-AzGraphSafe {
         $friendly = Get-NextThrottleMessage
         Write-Host "  $friendly" -ForegroundColor Yellow
         if (Get-Command Update-ScanStatus -ErrorAction SilentlyContinue) {
-            Update-ScanStatus $friendly
+            $statusMsg = if ($script:LastSubProgress) { "$friendly $script:LastSubProgress" } else { $friendly }
+            Update-ScanStatus $statusMsg
         }
         $waitEnd = (Get-Date).AddSeconds($retryAfter)
         while ((Get-Date) -lt $waitEnd) {
@@ -548,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.11.3'
+$script:AppVersion = '2.11.4'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -736,6 +735,11 @@ function Update-UIStatus {
 # Keeps the UI responsive during long per-subscription iterations.
 function Update-ScanStatus {
     param([string]$Message)
+    # Remember the latest subscription progress (for example "6/43 subs") so a
+    # throttle wait can keep showing it instead of a bare "Fetching numbers......".
+    if ($Message -match '(\d+)\s*/\s*(\d+)\s*subs') {
+        $script:LastSubProgress = "$($Matches[1])/$($Matches[2]) subscriptions"
+    }
     if ($script:StatusText) {
         $script:StatusText.Text = $Message
         [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
