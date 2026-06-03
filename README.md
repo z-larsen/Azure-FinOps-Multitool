@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.11.4](https://img.shields.io/badge/Version-2.11.4-brightgreen)
+![Version 2.12.0](https://img.shields.io/badge/Version-2.12.0-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,13 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.12.0
+
+**Changed — API cost-by-tag scan now completes reliably on large tenants:**
+- The cost-by-tag breakdown previously grouped Cost Management queries by `TagKey`/`TagValue`, which is only supported at management-group/EA scope. At subscription scope it returned HTTP 408/400 and, combined with the per-tag fallback, flooded the API with 429s on large tenants (for example 103 tags × 67 subscriptions × 2 timeframes) — often erroring out before finishing.
+- **The fix:** the API scan now issues a single `ResourceId`-grouped cost query per subscription (supported across EA, MCA, and pay-as-you-go) and attributes each resource's cost to its tag values client-side using the Resource Graph tag inventory (resource tag first, resource-group tag fallback). Subscriptions are queried in capped batches so the API is never flooded, each call self-retries on 429, and any subscription that times out or is throttled is recorded and skipped rather than aborting the whole scan. The breakdown reconciles back to the invoice with two synthetic buckets: `(untagged resources)` and `(non-resource charges)`.
+- The Cost Export Scan path is unchanged and remains the fastest option; this only affects the live API scan. Applies to both the GUI and CLI, which share the same module.
 
 ### v2.11.4
 
