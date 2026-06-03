@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.12.1](https://img.shields.io/badge/Version-2.12.1-brightgreen)
+![Version 2.12.2](https://img.shields.io/badge/Version-2.12.2-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -422,6 +422,12 @@ Tag variations are recognized (e.g., `cost-center`, `cc`, `bu`, `dept`, `applica
 ---
 
 ## Changelog
+
+### v2.12.2
+
+**Fixed — resource-cost scan progress counter stuck in the status bar:**
+- During the per-subscription resource-cost scan the status bar froze on an early count (for example `1/67 subscriptions`) even though the terminal showed the scan moving through every subscription. The per-subscription loop counter `$i` was being clobbered by an inner column-index `for ($i = ...)` loop that parses the Cost Management response, so the displayed progress no longer tracked the real subscription number.
+- **The fix:** the inner column-index loops now use their own variable (`$ci`), leaving the outer subscription counter intact so the status bar advances correctly. No change to the data collected.
 
 ### v2.12.1
 

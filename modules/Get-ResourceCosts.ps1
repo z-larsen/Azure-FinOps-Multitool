@@ -104,8 +104,8 @@ function Get-ResourceCosts {
             if ($resp.StatusCode -eq 200) {
                 $result = ($resp.Content | ConvertFrom-Json)
                 $cols = @{}
-                for ($i = 0; $i -lt $result.properties.columns.Count; $i++) {
-                    $cols[$result.properties.columns[$i].name] = $i
+                for ($ci = 0; $ci -lt $result.properties.columns.Count; $ci++) {
+                    $cols[$result.properties.columns[$ci].name] = $ci
                 }
 
                 $page = $result
@@ -234,8 +234,8 @@ function Get-ResourceCosts {
 
                 # Build column index from response metadata (same for all pages)
                 $cols = @{}
-                for ($i = 0; $i -lt $result.properties.columns.Count; $i++) {
-                    $cols[$result.properties.columns[$i].name] = $i
+                for ($ci = 0; $ci -lt $result.properties.columns.Count; $ci++) {
+                    $cols[$result.properties.columns[$ci].name] = $ci
                 }
 
                 # Process all pages (Cost Management API paginates at ~5000 rows)
