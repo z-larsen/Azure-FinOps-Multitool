@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.12.3](https://img.shields.io/badge/Version-2.12.3-brightgreen)
+![Version 2.12.4](https://img.shields.io/badge/Version-2.12.4-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -316,8 +316,8 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 
 - [x] ~~Custom tag deployment~~ — Deploy any user-defined tag from the Tags tab
 - [x] ~~Scheduled/headless scan mode~~ — runs unattended as an Azure Function companion (`AzureFinOpsFunction`) on a timer or HTTP trigger, sharing the same scan modules as the GUI
+- [x] ~~Email report delivery~~ — the headless Function emails the scan report on a daily schedule
 - [ ] PDF export with charts
-- [ ] Email report delivery from the headless scan
 
 ### Longer-term
 
