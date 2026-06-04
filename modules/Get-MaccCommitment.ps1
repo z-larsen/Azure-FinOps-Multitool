@@ -87,7 +87,10 @@ function Get-MaccCommitment {
     $lots = [System.Collections.Generic.List[PSCustomObject]]::new()
     $lotAccessDenied = $false   # set if the lots call is forbidden (403) for any account
     foreach ($ba in $billingAccounts) {
-        $lotPath = "/providers/Microsoft.Billing/billingAccounts/$($ba.Name)/providers/Microsoft.Consumption/lots?api-version=2024-08-01"
+        # Server-side filter to ConsumptionCommitment (the MACC) lots only. This
+        # mirrors the proven Cost Management data factory sample
+        # (MSBrett/ccm_datafactory), which reads the same lots endpoint.
+        $lotPath = "/providers/Microsoft.Billing/billingAccounts/$($ba.Name)/providers/Microsoft.Consumption/lots?api-version=2023-05-01&`$filter=source%20eq%20'ConsumptionCommitment'"
         try {
             $lotResp = Invoke-AzRestMethodWithRetry -Path $lotPath -Method GET
             if ($lotResp.StatusCode -ne 200) {
@@ -104,22 +107,23 @@ function Get-MaccCommitment {
 
                 $currency  = if ($p.billingCurrency) { $p.billingCurrency } elseif ($p.originalAmount.currency) { $p.originalAmount.currency } else { 'USD' }
                 $original  = if ($null -ne $p.originalAmount.value) { [double]$p.originalAmount.value } else { 0 }
-                $used      = if ($null -ne $p.usedAmount.value) { [double]$p.usedAmount.value } else { 0 }
 
-                # Remaining: prefer original - used; fall back to closedBalance.
-                $remaining = if ($original -gt 0) { [math]::Round($original - $used, 2) }
-                             elseif ($null -ne $p.closedBalance.value) { [double]$p.closedBalance.value }
-                             else { 0 }
-
-                $pctUsed = if ($original -gt 0) { [math]::Round(($used / $original) * 100, 1) } else { 0 }
+                # The Lots API does not return a "used" amount. closedBalance is
+                # the amount REMAINING on the commitment, so consumed is simply
+                # originalAmount - closedBalance. This is the same calculation
+                # used by the Cost Management data factory sample
+                # (MSBrett/ccm_datafactory).
+                $remaining = if ($null -ne $p.closedBalance.value) { [double]$p.closedBalance.value } else { 0 }
+                $used      = if ($original -gt 0) { [math]::Round($original - $remaining, 2) } else { 0 }
+                $pctUsed   = if ($original -gt 0) { [math]::Round(($used / $original) * 100, 1) } else { 0 }
 
                 $lots.Add([PSCustomObject]@{
                     BillingAccount = $ba.DisplayName
                     Agreement      = $ba.Agreement
                     Currency       = $currency
                     Commitment     = [math]::Round($original, 2)
-                    Consumed       = [math]::Round($used, 2)
-                    Remaining      = $remaining
+                    Consumed       = $used
+                    Remaining      = [math]::Round($remaining, 2)
                     PctUsed        = $pctUsed
                     Status         = if ($p.status) { $p.status } else { 'Unknown' }
                     StartDate      = if ($p.startDate) { ([datetime]$p.startDate).ToString('yyyy-MM-dd') } else { '' }

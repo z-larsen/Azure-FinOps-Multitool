@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.13.0](https://img.shields.io/badge/Version-2.13.0-brightgreen)
+![Version 2.13.1](https://img.shields.io/badge/Version-2.13.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -327,6 +327,7 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 
 ### Completed
 
+- [x] ~~MACC consumption accuracy fix~~ — consumed/remaining now derived from the Consumption Lots API the same way as the Cost Management data factory sample (consumed = `originalAmount` − `closedBalance`); the Lots API never returned a `usedAmount`, so the prior calculation always reported 0 consumed / full remaining
 - [x] ~~Budget vs. actual comparison per subscription~~ — Budget Status module with risk levels
 - [x] ~~Cost trend chart (last 6 months)~~ — WPF Canvas bar chart with per-subscription filter
 - [x] ~~Anomaly detection (spike alerts)~~ — 25%+ MoM cost change flagging per subscription
