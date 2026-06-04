@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.14.1'
+$script:AppVersion = '2.14.2'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -4876,7 +4876,15 @@ $script:scanStages = @(
     }
     @{ Label = 'Querying 6-month cost trend...'; Pct = 60; Action = {
             if ($script:ScanMode -eq 'Export') {
-                $script:scanData.CostTrend = ConvertTo-CostTrendFromExport -ExportData $script:ScanExportData
+                # The cost/resource/tag tabs read only the current month, but the
+                # trend needs several months. Re-read each export with -MonthsBack
+                # so the newest run folder per month is gathered into one series.
+                $trendResults = [System.Collections.Generic.List[object]]::new()
+                foreach ($ex in @($script:ScanExports)) {
+                    [void]$trendResults.Add((Get-CostExportData -Export $ex -Environment $script:scanData.Auth.Environment -MonthsBack 6))
+                }
+                $trendData = Merge-CostExportData -Results @($trendResults)
+                $script:scanData.CostTrend = ConvertTo-CostTrendFromExport -ExportData $trendData
             }
             else {
                 $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)

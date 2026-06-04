@@ -267,7 +267,11 @@ function Get-CostExportData {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Export,
-        [string]$Environment = 'AzureCloud'
+        [string]$Environment = 'AzureCloud',
+        # 0 (default) = read only the current billing month's run (for cost,
+        # resource, and tag tabs). >0 = read the newest run folder PER month for
+        # the last N months so the 6-month trend has a true multi-month series.
+        [int]$MonthsBack = 0
     )
 
     if ($Export.Format -and $Export.Format -notmatch 'csv') {
@@ -335,7 +339,7 @@ function Get-CostExportData {
         return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; Unsupported = $hasParquet; Reason = $reason; NoData = $true }
     }
 
-    # Pick the right run folder.
+    # Pick the right run folder(s).
     #
     # Cost Management / FinOps Hub exports re-emit one folder PER billing month
     # every day (e.g. .../20260601-20260630/<runTs>/<runId>/ for the open month
@@ -345,31 +349,54 @@ function Get-CostExportData {
     # after the current-month part and win, making the tool report last month's
     # FULL total as if it were this month's month-to-date.
     #
-    # Select the run whose date-range (YYYYMMDD-YYYYMMDD in the folder path)
-    # contains today, then take the newest run within that month. Fall back to
-    # the previous "newest LastModified" behavior only when no range parses.
+    # Parse the date-range (YYYYMMDD-YYYYMMDD) token from each blob's folder so
+    # runs can be bucketed by billing month.
     $today  = (Get-Date).Date
     $ranged = foreach ($b in $csvBlobs) {
         if ($b.Name -match '(\d{8})-(\d{8})') {
             $rs = [datetime]::MinValue; $re = [datetime]::MinValue
             $okS = [datetime]::TryParseExact($Matches[1], 'yyyyMMdd', [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$rs)
             $okE = [datetime]::TryParseExact($Matches[2], 'yyyyMMdd', [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$re)
-            if ($okS -and $okE) { [PSCustomObject]@{ Blob = $b; Start = $rs; End = $re } }
+            if ($okS -and $okE) { [PSCustomObject]@{ Blob = $b; Start = $rs; End = $re; MonthKey = $rs.ToString('yyyy-MM') } }
         }
     }
-    $ranged  = @($ranged)
-    $current = @($ranged | Where-Object { $today -ge $_.Start -and $today -le $_.End })
-    if ($current.Count -gt 0) {
-        $newest = ($current | Sort-Object { $_.Blob.LastModified } -Descending | Select-Object -First 1).Blob
+    $ranged = @($ranged)
+
+    $runParts = @()
+    if ($MonthsBack -gt 0 -and $ranged.Count -gt 0) {
+        # Trend mode: gather the newest run folder PER month for the last N
+        # months so the caller gets a true multi-month series rather than a
+        # single run. Each month lives in its own date-range folder and is
+        # re-emitted daily, so pick the newest run within each month.
+        $windowStart = (Get-Date -Year $today.Year -Month $today.Month -Day 1).AddMonths(-1 * ($MonthsBack - 1))
+        $partsList   = [System.Collections.Generic.List[object]]::new()
+        foreach ($grp in ($ranged | Group-Object MonthKey)) {
+            $mDate = [datetime]"$($grp.Name)-01"
+            if ($mDate -lt $windowStart) { continue }
+            $newest    = ($grp.Group | Sort-Object { $_.Blob.LastModified } -Descending | Select-Object -First 1).Blob
+            $runFolder = ($newest.Name -replace '/[^/]+$', '/')
+            foreach ($p in @($csvBlobs | Where-Object { $_.Name -like "$runFolder*" })) { [void]$partsList.Add($p) }
+        }
+        $runParts = @($partsList)
     }
-    else {
-        $newest = ($csvBlobs | Sort-Object LastModified -Descending | Select-Object -First 1)
+
+    if ($runParts.Count -eq 0) {
+        # Single-month mode (default): pick the run whose date-range contains
+        # today, then take the newest run within that month. Fall back to the
+        # previous "newest LastModified" behavior only when no range parses.
+        $current = @($ranged | Where-Object { $today -ge $_.Start -and $today -le $_.End })
+        if ($current.Count -gt 0) {
+            $newest = ($current | Sort-Object { $_.Blob.LastModified } -Descending | Select-Object -First 1).Blob
+        }
+        else {
+            $newest = ($csvBlobs | Sort-Object LastModified -Descending | Select-Object -First 1)
+        }
+        # A partitioned export writes multiple CSV parts in the same run folder.
+        # Group by the run folder (everything up to the last '/') of the chosen blob.
+        $runFolder = ($newest.Name -replace '/[^/]+$', '/')
+        $runParts  = @($csvBlobs | Where-Object { $_.Name -like "$runFolder*" })
+        if ($runParts.Count -eq 0) { $runParts = @($newest) }
     }
-    # A partitioned export writes multiple CSV parts in the same run folder.
-    # Group by the run folder (everything up to the last '/') of the chosen blob.
-    $runFolder = ($newest.Name -replace '/[^/]+$', '/')
-    $runParts  = @($csvBlobs | Where-Object { $_.Name -like "$runFolder*" })
-    if ($runParts.Count -eq 0) { $runParts = @($newest) }
 
     $dataDate = ($runParts | Sort-Object LastModified -Descending | Select-Object -First 1).LastModified
 

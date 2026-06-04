@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.14.1](https://img.shields.io/badge/Version-2.14.1-brightgreen)
+![Version 2.14.2](https://img.shields.io/badge/Version-2.14.2-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -327,6 +327,7 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 
 ### Completed
 
+- [x] ~~6-month trend multi-month read~~ — the trend now re-reads each export with a 6-month lookback, gathering the newest run folder **per billing month** instead of reusing the single current-month dataset the cost/resource/tag tabs consume. Each month lives in its own `YYYYMMDD-YYYYMMDD` folder and is re-emitted daily, so the trend now renders every available month (e.g. Mar–Jun) rather than one. Live-query mode (and the headless Function, which already queries Cost Management for the monthly grain) were unaffected
 - [x] ~~Export reader month-selection fix~~ — the FinOps Hub / Cost Management export reader now selects the run folder whose date-range covers the current billing month instead of the one with the newest blob timestamp. Hubs re-emit the prior (closed) month daily, so picking "newest LastModified" could read last month's full-month total as if it were month-to-date (and then 10× it in the forecast). Selection is now driven by the `YYYYMMDD-YYYYMMDD` date-range in the blob path, tie-broken by newest run
 - [x] ~~MACC consumption accuracy fix~~ — consumed/remaining now derived from the Consumption Lots API the same way as the Cost Management data factory sample (consumed = `originalAmount` − `closedBalance`); the Lots API never returned a `usedAmount`, so the prior calculation always reported 0 consumed / full remaining
 - [x] ~~Budget vs. actual comparison per subscription~~ — Budget Status module with risk levels
