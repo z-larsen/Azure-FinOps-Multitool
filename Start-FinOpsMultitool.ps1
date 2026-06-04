@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.14.2'
+$script:AppVersion = '2.15.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -1382,6 +1382,9 @@ function Populate-OptimizationTab {
                 Subscription     = $rec.Subscription
                 Resource         = $rec.ResourceName
                 'Resource Type'  = $rec.ResourceType
+                SKU              = if ($rec.SKU) { $rec.SKU } else { '-' }
+                Region           = if ($rec.Region) { $rec.Region } else { '-' }
+                Qty              = if ($rec.Qty) { $rec.Qty } else { '-' }
                 Impact           = $rec.Impact
                 Problem          = $rec.Problem
                 Solution         = $rec.Solution
@@ -1397,6 +1400,9 @@ function Populate-OptimizationTab {
                 Subscription     = '-'
                 Resource         = if ($rr.SKU) { $rr.SKU } else { $rr.ResourceType }
                 'Resource Type'  = $rr.ResourceType
+                SKU              = if ($rr.SKU) { $rr.SKU } else { '-' }
+                Region           = '-'
+                Qty              = if ($rr.RecommendedQty) { $rr.RecommendedQty } else { '-' }
                 Impact           = 'High'
                 Problem          = "$($rr.RecommendedQty) x $($rr.ResourceType) at PAYG rates"
                 Solution         = "Purchase $($rr.RecommendedQty) reserved instance(s) ($($rr.Term))"
@@ -1425,6 +1431,9 @@ function Populate-OptimizationTab {
                 Subscription     = $rec.Subscription
                 Resource         = $rec.ResourceName
                 'Resource Type'  = $rec.ResourceType
+                SKU              = if ($rec.SKU) { $rec.SKU } else { '-' }
+                Region           = if ($rec.Region) { $rec.Region } else { '-' }
+                Qty              = if ($rec.Qty) { $rec.Qty } else { '-' }
                 Impact           = $rec.Impact
                 Problem          = $rec.Problem
                 Solution         = $rec.Solution
