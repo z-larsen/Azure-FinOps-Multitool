@@ -335,9 +335,38 @@ function Get-CostExportData {
         return [PSCustomObject]@{ Rows = @(); DataDate = $null; Currency = 'USD'; Unsupported = $hasParquet; Reason = $reason; NoData = $true }
     }
 
-    $newest = ($csvBlobs | Sort-Object LastModified -Descending | Select-Object -First 1)
+    # Pick the right run folder.
+    #
+    # Cost Management / FinOps Hub exports re-emit one folder PER billing month
+    # every day (e.g. .../20260601-20260630/<runTs>/<runId>/ for the open month
+    # AND .../20260501-20260531/<runTs>/<runId>/ for the prior, just-closed
+    # month). Both are rewritten on the same daily run, so "newest blob by
+    # LastModified" is unreliable - the prior-month part can land a few seconds
+    # after the current-month part and win, making the tool report last month's
+    # FULL total as if it were this month's month-to-date.
+    #
+    # Select the run whose date-range (YYYYMMDD-YYYYMMDD in the folder path)
+    # contains today, then take the newest run within that month. Fall back to
+    # the previous "newest LastModified" behavior only when no range parses.
+    $today  = (Get-Date).Date
+    $ranged = foreach ($b in $csvBlobs) {
+        if ($b.Name -match '(\d{8})-(\d{8})') {
+            $rs = [datetime]::MinValue; $re = [datetime]::MinValue
+            $okS = [datetime]::TryParseExact($Matches[1], 'yyyyMMdd', [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$rs)
+            $okE = [datetime]::TryParseExact($Matches[2], 'yyyyMMdd', [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$re)
+            if ($okS -and $okE) { [PSCustomObject]@{ Blob = $b; Start = $rs; End = $re } }
+        }
+    }
+    $ranged  = @($ranged)
+    $current = @($ranged | Where-Object { $today -ge $_.Start -and $today -le $_.End })
+    if ($current.Count -gt 0) {
+        $newest = ($current | Sort-Object { $_.Blob.LastModified } -Descending | Select-Object -First 1).Blob
+    }
+    else {
+        $newest = ($csvBlobs | Sort-Object LastModified -Descending | Select-Object -First 1)
+    }
     # A partitioned export writes multiple CSV parts in the same run folder.
-    # Group by the run folder (everything up to the last '/') of the newest blob.
+    # Group by the run folder (everything up to the last '/') of the chosen blob.
     $runFolder = ($newest.Name -replace '/[^/]+$', '/')
     $runParts  = @($csvBlobs | Where-Object { $_.Name -like "$runFolder*" })
     if ($runParts.Count -eq 0) { $runParts = @($newest) }
