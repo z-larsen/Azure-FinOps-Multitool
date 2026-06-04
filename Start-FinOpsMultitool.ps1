@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.15.0'
+$script:AppVersion = '2.15.1'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -5213,7 +5213,7 @@ $script:ExportScanButton.Add_Click({
                     if ($picked) {
                         $script:StatusText.Text = "Creating export in $($picked.Name)..."
                         [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
-                        $res = New-CostExport -SubscriptionId $picked.SubId -StorageResourceId $picked.ResourceId
+                        $res = New-CostExport -SubscriptionId $picked.SubId -StorageResourceId $picked.ResourceId -Location $picked.Location
                         $icon = if ($res.Success) { 'Information' } else { 'Warning' }
                         [System.Windows.MessageBox]::Show($res.Message, 'Cost Export', 'OK', $icon) | Out-Null
                         $script:StatusText.Text = if ($res.Success) { "Export created. Re-run 'Cost Export Scan' in a few minutes." } else { 'Export creation failed.' }

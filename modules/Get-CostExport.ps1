@@ -701,6 +701,7 @@ function New-CostExport {
     param(
         [Parameter(Mandatory)][string]$SubscriptionId,
         [Parameter(Mandatory)][string]$StorageResourceId,
+        [string]$Location,
         [string]$Container = 'finops-multitool-exports',
         [string]$RootFolder = 'exports',
         [string]$Name = 'FinOpsMultitool-MTD-CSV'
@@ -710,7 +711,37 @@ function New-CostExport {
     $scope  = "/subscriptions/$SubscriptionId"
     $path   = "$scope/providers/Microsoft.CostManagement/exports/$Name`?api-version=$apiVer"
 
-    $body = @{
+    # The storage account's subscription must be registered with the
+    # Microsoft.CostManagementExports resource provider before an export can
+    # deliver to it. The portal does this automatically; an API caller must
+    # register explicitly or the create/run can fail on a fresh subscription.
+    # Derive the storage subscription from its resource id (it may differ from
+    # the export scope's subscription) and register idempotently.
+    $storageSubId = $SubscriptionId
+    if ($StorageResourceId -match '/subscriptions/([^/]+)/') { $storageSubId = $Matches[1] }
+    try {
+        $regPath = "/subscriptions/$storageSubId/providers/Microsoft.CostManagementExports/register?api-version=2022-09-01"
+        [void](Invoke-AzRestMethodWithRetry -Path $regPath -Method POST)
+    } catch {
+        Write-Warning "  Could not register Microsoft.CostManagementExports on $storageSubId (continuing): $($_.Exception.Message)"
+    }
+
+    # Resolve the storage account region if the caller did not supply it. A
+    # location is required when the export carries a managed identity.
+    if (-not $Location) {
+        try {
+            $saResp = Invoke-AzRestMethodWithRetry -Path "$StorageResourceId`?api-version=2023-01-01" -Method GET
+            if ($saResp -and $saResp.StatusCode -eq 200) { $Location = (($saResp.Content | ConvertFrom-Json).location) }
+        } catch { Write-Warning "  Could not resolve storage account location: $($_.Exception.Message)" }
+    }
+
+    # A system-assigned managed identity makes the export work against storage
+    # accounts behind a firewall: Cost Management grants that identity
+    # Storage Blob Data Contributor on the container (the user needs
+    # Microsoft.Authorization/roleAssignments/write on the account for this to
+    # succeed). identity + location are only honored together, so only attach
+    # the identity when a location is known.
+    $bodyObj = @{
         properties = @{
             schedule = @{
                 status     = 'Active'
@@ -735,12 +766,21 @@ function New-CostExport {
                 dataSet   = @{ granularity = 'Daily' }
             }
         }
-    } | ConvertTo-Json -Depth 12
+    }
+    if ($Location) {
+        $bodyObj['identity'] = @{ type = 'SystemAssigned' }
+        $bodyObj['location'] = $Location
+    }
+    $body = $bodyObj | ConvertTo-Json -Depth 12
 
     $create = Invoke-AzRestMethodWithRetry -Path $path -Method PUT -Payload $body
     if (-not $create -or $create.StatusCode -notin @(200, 201)) {
         $msg = if ($create) { "HTTP $($create.StatusCode)" } else { 'no response' }
-        return [PSCustomObject]@{ Success = $false; Message = "Export creation failed ($msg). Needs Cost Management Contributor + Storage Blob Data Contributor."; Name = $Name }
+        $detail = ''
+        if ($create -and $create.Content -match 'roleAssignments/write|Unauthorized') {
+            $detail = " For firewalled storage you also need Owner (or Microsoft.Authorization/roleAssignments/write) on the storage account so Cost Management can grant its managed identity access."
+        }
+        return [PSCustomObject]@{ Success = $false; Message = "Export creation failed ($msg). Needs Cost Management Contributor on the subscription + Storage Blob Data Contributor on the account.$detail"; Name = $Name }
     }
 
     # Trigger an immediate one-time run so data starts materializing
@@ -748,11 +788,17 @@ function New-CostExport {
     $run = Invoke-AzRestMethodWithRetry -Path $runPath -Method POST
     $runOk = ($run -and $run.StatusCode -in @(200, 202))
 
+    $fwNote = if ($Location) {
+        " If the storage account is behind a firewall, ensure 'Allow trusted Azure services' is on and that you hold roleAssignments/write on the account; otherwise the run may create the export but fail to write blobs."
+    } else {
+        " Storage region was not resolved, so no managed identity was attached - this export will only deliver to storage with public network access enabled."
+    }
+
     return [PSCustomObject]@{
         Success   = $true
         RunQueued = $runOk
         Name      = $Name
-        Message   = if ($runOk) { "Export '$Name' created and a run was queued. Data lands in storage in a few minutes." } else { "Export '$Name' created. Trigger a run from the portal, or wait for the daily schedule." }
+        Message   = if ($runOk) { "Export '$Name' created and a run was queued. Data lands in storage within a few hours.$fwNote" } else { "Export '$Name' created. Trigger a run from the portal, or wait for the daily schedule.$fwNote" }
     }
 }
 

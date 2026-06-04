@@ -4,7 +4,7 @@
 ![PowerShell 7.0+](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)
 ![Azure Az Modules](https://img.shields.io/badge/Azure-Az%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Version 2.15.0](https://img.shields.io/badge/Version-2.15.0-brightgreen)
+![Version 2.15.1](https://img.shields.io/badge/Version-2.15.1-brightgreen)
 
 A PowerShell WPF application that scans an Azure tenant and provides a
 single-pane-of-glass view of costs, tagging health, optimization
@@ -327,6 +327,7 @@ The Azure FinOps Multitool is the foundation that makes that possible: a proven,
 
 ### Completed
 
+- [x] ~~Firewalled-storage export creation~~ — `New-CostExport` now attaches a **system-assigned managed identity** + `location` to the export so Cost Management can grant it Storage Blob Data Contributor and deliver to storage accounts behind a firewall (matching the Step 2 help text, which previously over-promised). It also **registers the `Microsoft.CostManagementExports` resource provider** on the storage account's subscription before creating the export (the portal does this automatically; an API caller must do it explicitly), resolves the storage region when the caller doesn't supply it, and returns clearer messaging about firewall/`roleAssignments/write` requirements and realistic data-landing time (a few hours, not minutes)
 - [x] ~~RI/SP recommendation de-duplication~~ — Azure Advisor frequently emits several identical recommendation records that differ only by recommendation GUID (overlapping generation cycles), which made a single buy appear 3–6 times in the Reserved Instance grid and inflated the estimated-savings total. `Get-ReservationAdvice` now captures the `displaySKU`, `region`, and `displayQty` extended properties and collapses records on the meaningful tuple (subscription + resource type + term + SKU + region + qty + savings), keeping one row per distinct recommendation with a `DuplicateCount`. The RI and SP grids now surface **SKU**, **Region**, and **Qty** columns so each row is self-explanatory
 - [x] ~~6-month trend multi-month read~~ — the trend now re-reads each export with a 6-month lookback, gathering the newest run folder **per billing month** instead of reusing the single current-month dataset the cost/resource/tag tabs consume. Each month lives in its own `YYYYMMDD-YYYYMMDD` folder and is re-emitted daily, so the trend now renders every available month (e.g. Mar–Jun) rather than one. Live-query mode (and the headless Function, which already queries Cost Management for the monthly grain) were unaffected
 - [x] ~~Export reader month-selection fix~~ — the FinOps Hub / Cost Management export reader now selects the run folder whose date-range covers the current billing month instead of the one with the newest blob timestamp. Hubs re-emit the prior (closed) month daily, so picking "newest LastModified" could read last month's full-month total as if it were month-to-date (and then 10× it in the forecast). Selection is now driven by the `YYYYMMDD-YYYYMMDD` date-range in the blob path, tie-broken by newest run
