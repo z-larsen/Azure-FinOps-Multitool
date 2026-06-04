@@ -699,3 +699,101 @@ function New-CostExport {
         Message   = if ($runOk) { "Export '$Name' created and a run was queued. Data lands in storage in a few minutes." } else { "Export '$Name' created. Trigger a run from the portal, or wait for the daily schedule." }
     }
 }
+
+# -- Dedupe export descriptors to the newest run per subscription ---------
+# When several exports target the same subscription, keep only the one with
+# the most recent LastRunDate so a multi-subscription scan does not double-
+# count a subscription's cost. Exports without a SubId are kept as-is.
+function Select-NewestExportPerSub {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object[]]$Exports)
+
+    $bySub = [ordered]@{}
+    $keep  = [System.Collections.Generic.List[object]]::new()
+    foreach ($e in $Exports) {
+        if (-not $e) { continue }
+        $key = if ($e.SubId) { [string]$e.SubId } else { $null }
+        if (-not $key) { [void]$keep.Add($e); continue }
+        $cur = $bySub[$key]
+        if (-not $cur) { $bySub[$key] = $e; continue }
+        $curDate = if ($cur.LastRunDate) { $cur.LastRunDate } else { [datetime]::MinValue }
+        $newDate = if ($e.LastRunDate) { $e.LastRunDate } else { [datetime]::MinValue }
+        if ($newDate -gt $curDate) { $bySub[$key] = $e }
+    }
+    foreach ($v in $bySub.Values) { [void]$keep.Add($v) }
+    return @($keep)
+}
+
+# -- Merge several Get-CostExportData results into one --------------------
+# Concatenates rows from multiple exports (typically one per subscription)
+# into a single ExportData object that the ConvertTo-*FromExport converters
+# consume unchanged. The first result carrying a usable ColMap defines the
+# column mapping. Error-only results (AccessDenied / Unsupported / NoData /
+# NoCostColumn with no rows) contribute no rows but are tallied so the caller
+# can report a partial or total failure with the right reason.
+function Merge-CostExportData {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object[]]$Results)
+
+    $rows     = [System.Collections.Generic.List[object]]::new()
+    $colMap   = $null
+    $headers  = @()
+    $currency = 'USD'
+    $dataDate = $null
+    $okCount  = 0
+    $denied = 0; $unsupported = 0; $noData = 0; $noCost = 0
+    $reasons = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($r in $Results) {
+        if (-not $r) { continue }
+        if ($r.AccessDenied) { $denied++ }
+        if ($r.Unsupported) { $unsupported++ }
+        if ($r.Reason) { [void]$reasons.Add([string]$r.Reason) }
+
+        $rRows = @($r.Rows)
+        if ($rRows.Count -eq 0) { if ($r.NoData) { $noData++ }; continue }
+        if (-not $r.ColMap -or -not $r.ColMap.Cost) { $noCost++; continue }
+
+        if (-not $colMap) {
+            $colMap  = $r.ColMap
+            $headers = @($r.Headers)
+            if ($r.Currency) { $currency = $r.Currency }
+        }
+        if ($r.DataDate -and (-not $dataDate -or $r.DataDate -gt $dataDate)) { $dataDate = $r.DataDate }
+        foreach ($row in $rRows) { [void]$rows.Add($row) }
+        $okCount++
+    }
+
+    if ($rows.Count -gt 0) {
+        return [PSCustomObject]@{
+            Rows         = $rows
+            ColMap       = $colMap
+            DataDate     = $dataDate
+            Currency     = $currency
+            RowCount     = $rows.Count
+            Headers      = $headers
+            NoCostColumn = $false
+            NoData       = $false
+            MergedCount  = $okCount
+            SourceCount  = @($Results).Count
+        }
+    }
+
+    # No usable rows from any export - surface the dominant failure reason.
+    $obj = [PSCustomObject]@{
+        Rows        = @()
+        ColMap      = $null
+        DataDate    = $null
+        Currency    = 'USD'
+        RowCount    = 0
+        Headers     = @()
+        MergedCount = 0
+        SourceCount = @($Results).Count
+        Reason      = (($reasons | Select-Object -Unique) -join ' ')
+    }
+    if ($denied -gt 0) { Add-Member -InputObject $obj -NotePropertyName AccessDenied -NotePropertyValue $true }
+    elseif ($unsupported -gt 0) { Add-Member -InputObject $obj -NotePropertyName Unsupported -NotePropertyValue $true }
+    elseif ($noCost -gt 0) { Add-Member -InputObject $obj -NotePropertyName NoCostColumn -NotePropertyValue $true }
+    else { Add-Member -InputObject $obj -NotePropertyName NoData -NotePropertyValue $true }
+    return $obj
+}

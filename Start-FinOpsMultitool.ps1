@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.12.4'
+$script:AppVersion = '2.13.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -717,6 +717,14 @@ $script:actionLog = [System.Collections.Generic.List[PSCustomObject]]::new()
 # Checked by Populate-OverviewTab to display a warning banner.
 $script:costAccessIssue = $null
 
+# -- Export Cost Issue Tracking ----------------------------------------
+# Set during an Export-mode scan when the export blobs cannot be read
+# (insufficient permissions, Parquet/unsupported format, no data, or no
+# recognized cost column). Holds the full contextual banner message that
+# Populate-OverviewTab renders. The scan still completes; only the
+# cost-derived figures are blank.
+$script:exportCostIssue = $null
+
 ###########################################################################
 # HELPER FUNCTIONS
 ###########################################################################
@@ -812,7 +820,11 @@ function Populate-OverviewTab {
     $d = $script:scanData
 
     # Cost access warning banner
-    if ($script:costAccessIssue) {
+    if ($script:exportCostIssue) {
+        $script:CostAccessWarningText.Text = $script:exportCostIssue
+        $script:CostAccessWarning.Visibility = 'Visible'
+    }
+    elseif ($script:costAccessIssue) {
         $agreementType = if ($d.Contract -and $d.Contract[0].AgreementType) { $d.Contract[0].AgreementType } else { '' }
         $warningMsg = switch ($script:costAccessIssue) {
             'EA' { "Cost data is unavailable because this EA enrollment has 'Account owners can view charges' (AO view charges) disabled. An Enterprise Administrator must enable it: Azure portal > Cost Management + Billing > Billing scopes > select the billing account > Policies > set 'Account owners can view charges' (and 'Department admins can view charges') to On, then Save. Allow up to ~30 minutes to take effect. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data" }
@@ -4717,22 +4729,40 @@ $script:scanStages = @(
     }
     @{ Label = 'Querying cost data...'; Pct = 30; Action = {
             if ($script:ScanMode -eq 'Export') {
-                $script:StatusText.Text = "Reading cost export '$($script:ScanExport.Name)'..."
-                $script:ScanExportData = Get-CostExportData -Export $script:ScanExport -Environment $script:scanData.Auth.Environment
-                if ($script:ScanExportData.Unsupported) {
-                    throw "Export format not readable: $($script:ScanExportData.Reason). Use Live Scan or create a CSV export."
+                # Read each armed export and merge their rows into one dataset
+                # so a multi-subscription selection scans as a single cost set.
+                $exps = @($script:ScanExports)
+                $expRefLabel = if ($exps.Count -eq 1) { "the export '$($exps[0].Name)'" } else { "the $($exps.Count) selected exports" }
+                $results = [System.Collections.Generic.List[object]]::new()
+                $i = 0
+                foreach ($ex in $exps) {
+                    $i++
+                    $script:StatusText.Text = if ($exps.Count -eq 1) { "Reading cost export '$($ex.Name)'..." } else { "Reading cost export $i of $($exps.Count): '$($ex.Name)'..." }
+                    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
+                    [void]$results.Add((Get-CostExportData -Export $ex -Environment $script:scanData.Auth.Environment))
                 }
+                $script:ScanExportData = Merge-CostExportData -Results @($results)
+                # Surface a contextual, non-fatal message based on WHY the export
+                # could not be read. The scan still completes; only the cost-derived
+                # figures are blank, and the Overview banner explains the reason.
+                $exportRef = $expRefLabel
                 if ($script:ScanExportData.AccessDenied) {
-                    throw "Access denied reading export blobs. You need 'Storage Blob Data Reader' on the export storage account."
+                    $script:exportCostIssue = "Cost data from $exportRef could not be read due to insufficient permissions. Cost exports are written to a storage account, and reading those files requires the data-plane 'Storage Blob Data Reader' role on the export's storage account - the management-plane Reader or Contributor role is not enough. Ask a storage account owner to grant you 'Storage Blob Data Reader' at the storage account (or container) scope; role changes can take up to 10 minutes to apply. All non-cost findings (idle/orphaned resources, Advisor recommendations, governance, security) are complete. Reference: https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage#storage-blob-data-reader"
                 }
-                if ($script:ScanExportData.NoData) {
-                    $why = if ($script:ScanExportData.Reason) { $script:ScanExportData.Reason } else { 'The export run folder contained no CSV data rows.' }
-                    throw "Export returned no cost data. $why Use Live Scan or pick an export with recent data."
+                elseif ($script:ScanExportData.Unsupported) {
+                    $why = if ($script:ScanExportData.Reason) { $script:ScanExportData.Reason } else { 'The export uses a format this tool cannot parse.' }
+                    $script:exportCostIssue = "Cost data from $exportRef could not be read. $why Recreate the Cost Management export using CSV format (not Parquet), then re-run the scan - or use Live Scan instead. All non-cost findings (idle/orphaned resources, Advisor recommendations, governance, security) are complete. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-improved-exports"
                 }
-                if ($script:ScanExportData.NoCostColumn) {
+                elseif ($script:ScanExportData.NoData) {
+                    $why = if ($script:ScanExportData.Reason) { $script:ScanExportData.Reason } else { 'The most recent export run folder contained no CSV data rows.' }
+                    $script:exportCostIssue = "Cost data from $exportRef could not be read because it returned no data. $why This usually means the export has not completed a run yet or was just created - wait for the next scheduled run, pick an export with recent data, or use Live Scan. All non-cost findings (idle/orphaned resources, Advisor recommendations, governance, security) are complete. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-improved-exports"
+                }
+                elseif ($script:ScanExportData.NoCostColumn) {
                     $cols = if ($script:ScanExportData.Headers) { ($script:ScanExportData.Headers -join ', ') } else { '(none)' }
-                    throw "Export read $($script:ScanExportData.RowCount) row(s) but no recognized cost column was found. Columns present: $cols"
+                    $script:exportCostIssue = "Cost data from $exportRef could not be read because none of the recognized cost columns (CostInBillingCurrency, CostInUsd, PreTaxCost, or Cost) were found. The export schema may be a legacy or non-standard format. Columns present: $cols. Recreate the export using the latest cost and usage (FOCUS) dataset, then re-run the scan. All non-cost findings (idle/orphaned resources, Advisor recommendations, governance, security) are complete. Reference: https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-improved-exports"
                 }
+                # ConvertTo-* safely return empty structures when the export object
+                # has no usable cost column, so downstream stages stay non-fatal.
                 $script:scanData.Costs = ConvertTo-CostDataFromExport -ExportData $script:ScanExportData -Subscriptions $script:scanData.Auth.Subscriptions
             }
             else {
@@ -4869,10 +4899,10 @@ $script:scanStages = @(
 
 $script:currentStage = 0
 $script:ScanMode = 'Live'      # 'Live' = query API; 'Export' = read a Cost Management export
-$script:ScanExport = $null     # selected export descriptor when ScanMode = 'Export'
-$script:ScanExportData = $null # parsed export rows + column map (loaded once per export scan)
-$script:ExportArmed = $false   # true once an export is selected and the button is armed to scan
-$script:ArmedExport = $null    # the export descriptor armed for scanning
+$script:ScanExports = @()      # selected export descriptor(s) when ScanMode = 'Export'
+$script:ScanExportData = $null # merged export rows + column map (loaded once per export scan)
+$script:ExportArmed = $false   # true once export(s) are selected and the button is armed to scan
+$script:ArmedExports = @()     # the export descriptor(s) armed for scanning
 $script:scanTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:scanTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 
@@ -4934,7 +4964,7 @@ $script:ScanButton.Add_Click({
         $script:ScanMode = 'Live'
         # Clear any armed export so the green button resets to its default state
         $script:ExportArmed = $false
-        $script:ArmedExport = $null
+        $script:ArmedExports = @()
         $script:ExportScanButton.Content = 'Cost Export Scan'
         $script:ScanButton.IsEnabled = $false
         $script:ScanButton.Visibility = 'Collapsed'
@@ -4944,6 +4974,7 @@ $script:ScanButton.Add_Click({
         $script:ExportScanButton.IsEnabled = $false
         $script:ExportButton.IsEnabled = $false
         $script:costAccessIssue = $null
+        $script:exportCostIssue = $null
         if ($script:costDeniedSubs) { $script:costDeniedSubs.Clear() }
         $script:costSuccessCount = 0
         $script:costDeniedStreak = 0
@@ -4959,7 +4990,9 @@ function Show-ListPickerDialog {
         [string]$Prompt = 'Choose an item:',
         [Parameter(Mandatory)][object[]]$Items,
         [scriptblock]$DisplayScript = { param($i) "$i" },
-        [System.Windows.Window]$ParentWindow
+        [System.Windows.Window]$ParentWindow,
+        [switch]$MultiSelect,
+        [scriptblock]$PreSelect    # param($i) -> $true to pre-select in multi mode
     )
     if (-not $Items -or $Items.Count -eq 0) { return $null }
 
@@ -4977,11 +5010,16 @@ function Show-ListPickerDialog {
     [System.Windows.Controls.Grid]::SetRow($lbl, 0); [void]$grid.Children.Add($lbl)
 
     $list = [System.Windows.Controls.ListBox]@{}
+    if ($MultiSelect) { $list.SelectionMode = 'Extended' }
     foreach ($it in $Items) {
         $item = [System.Windows.Controls.ListBoxItem]@{ Content = (& $DisplayScript $it); Tag = $it }
         [void]$list.Items.Add($item)
+        if ($MultiSelect -and $PreSelect -and (& $PreSelect $it)) { $item.IsSelected = $true }
     }
-    if ($list.Items.Count -gt 0) { $list.SelectedIndex = 0 }
+    if ($MultiSelect) {
+        if ($list.SelectedItems.Count -eq 0 -and $list.Items.Count -gt 0) { $list.Items[0].IsSelected = $true }
+    }
+    elseif ($list.Items.Count -gt 0) { $list.SelectedIndex = 0 }
     [System.Windows.Controls.Grid]::SetRow($list, 1); [void]$grid.Children.Add($list)
 
     $btnPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal'; HorizontalAlignment = 'Right'; Margin = '0,12,0,0' }
@@ -4996,7 +5034,15 @@ function Show-ListPickerDialog {
     # module scope (not this function's), so the value would be lost. A
     # captured hashtable reference is shared, so mutating .Picked works.
     $result = @{ Picked = $null }
-    $ok.Add_Click({ if ($list.SelectedItem) { $result.Picked = $list.SelectedItem.Tag }; $dlg.DialogResult = $true; $dlg.Close() }.GetNewClosure())
+    $isMulti = [bool]$MultiSelect
+    $ok.Add_Click({
+            if ($isMulti) {
+                $sel = @($list.SelectedItems | ForEach-Object { $_.Tag })
+                $result.Picked = $sel
+            }
+            elseif ($list.SelectedItem) { $result.Picked = $list.SelectedItem.Tag }
+            $dlg.DialogResult = $true; $dlg.Close()
+        }.GetNewClosure())
     $null = $dlg.ShowDialog()
     return $result.Picked
 }
@@ -5011,12 +5057,12 @@ $script:ExportScanButton.Add_Click({
         }
 
         # -- Already armed: this click starts the export-mode scan ------
-        if ($script:ExportArmed -and $script:ArmedExport) {
+        if ($script:ExportArmed -and $script:ArmedExports -and $script:ArmedExports.Count -gt 0) {
             $script:ScanMode = 'Export'
-            $script:ScanExport = $script:ArmedExport
+            $script:ScanExports = @($script:ArmedExports)
             $script:ScanExportData = $null
             $script:ExportArmed = $false
-            $script:ArmedExport = $null
+            $script:ArmedExports = @()
             $script:ExportScanButton.Content = 'Cost Export Scan'
             $script:ScanButton.Visibility = 'Collapsed'
             $script:CancelScanButton.Visibility = 'Visible'
@@ -5025,6 +5071,7 @@ $script:ExportScanButton.Add_Click({
             $script:ExportScanButton.IsEnabled = $false
             $script:ExportButton.IsEnabled = $false
             $script:costAccessIssue = $null
+            $script:exportCostIssue = $null
             if ($script:costDeniedSubs) { $script:costDeniedSubs.Clear() }
             $script:costSuccessCount = 0
             $script:costDeniedStreak = 0
@@ -5081,32 +5128,43 @@ $script:ExportScanButton.Add_Click({
             return
         }
 
-        # -- Pick the export (newest first) -----------------------------
+        # -- Pick the export(s): multi-select, newest per subscription --
+        # Present every CSV export, pre-selecting the newest run per
+        # subscription. The user can add/remove. The final selection is then
+        # deduped so each subscription contributes only its newest export.
         $sortedExports = @($csvExports | Sort-Object { if ($_.LastRunDate) { $_.LastRunDate } else { [datetime]::MinValue } } -Descending)
-        $chosen = $sortedExports[0]
+        $defaults = @(Select-NewestExportPerSub -Exports $sortedExports)
+        $defaultKeys = @{}
+        foreach ($d in $defaults) { $defaultKeys["$($d.SubId)|$($d.Name)"] = $true }
+
+        $chosenSet = $defaults
         if ($sortedExports.Count -gt 1) {
-            $picked = Show-ListPickerDialog -Title 'Choose a cost export' -Prompt 'Multiple exports found. Select one to scan against:' -Items $sortedExports -DisplayScript {
-                param($e)
-                $age = if ($e.LastRunDate) { "$([int]((Get-Date) - $e.LastRunDate).TotalDays)d old - $($e.LastRunDate.ToString('yyyy-MM-dd'))" } else { 'run date unknown' }
-                "$($e.Name)  [$($e.Type)]  -  $($e.SubName)  ($age)"
-            } -ParentWindow $window
-            if (-not $picked) { $script:ExportScanButton.IsEnabled = $true; $script:ScanButton.IsEnabled = $true; $script:StatusText.Text = 'Ready.'; return }
-            $chosen = $picked
+            $picked = @(Show-ListPickerDialog -Title 'Choose cost export(s)' -Prompt "Select one or more exports to scan against (Ctrl/Shift to multi-select). The newest export per subscription is pre-selected; duplicates for the same subscription are reduced to the newest run." -Items $sortedExports -MultiSelect -PreSelect {
+                    param($e); $defaultKeys.ContainsKey("$($e.SubId)|$($e.Name)")
+                } -DisplayScript {
+                    param($e)
+                    $age = if ($e.LastRunDate) { "$([int]((Get-Date) - $e.LastRunDate).TotalDays)d old - $($e.LastRunDate.ToString('yyyy-MM-dd'))" } else { 'run date unknown' }
+                    "$($e.Name)  [$($e.Type)]  -  $($e.SubName)  ($age)"
+                } -ParentWindow $window)
+            if (-not $picked -or $picked.Count -eq 0) { $script:ExportScanButton.IsEnabled = $true; $script:ScanButton.IsEnabled = $true; $script:StatusText.Text = 'Ready.'; return }
+            $chosenSet = @(Select-NewestExportPerSub -Exports $picked)
         }
 
-        # -- Arm the export: relabel the green button to "Scan Export" --
+        # -- Arm the export(s): relabel the green button to "Scan Export" --
         # A second click on the button (now "Scan Export") starts the scan.
-        $ageStr = if ($chosen.LastRunDate) {
-            $days = [int]((Get-Date) - $chosen.LastRunDate).TotalDays
-            "$($chosen.LastRunDate.ToString('yyyy-MM-dd HH:mm')) ($days day$(if($days -ne 1){'s'}) old)"
+        $newest = @($chosenSet | Sort-Object { if ($_.LastRunDate) { $_.LastRunDate } else { [datetime]::MinValue } } -Descending)[0]
+        $ageStr = if ($newest.LastRunDate) {
+            $days = [int]((Get-Date) - $newest.LastRunDate).TotalDays
+            "$($newest.LastRunDate.ToString('yyyy-MM-dd HH:mm')) ($days day$(if($days -ne 1){'s'}) old)"
         } else { 'unknown (no run history)' }
 
-        $script:ArmedExport = $chosen
+        $script:ArmedExports = $chosenSet
         $script:ExportArmed = $true
         $script:ExportScanButton.Content = 'Scan Export'
         $script:ExportScanButton.IsEnabled = $true
         $script:ScanButton.IsEnabled = $true
-        $script:StatusText.Text = "Export ready: $($chosen.Name) - latest data $ageStr. Click 'Scan Export' to begin (or 'Live Scan' for real-time)."
+        $exportLabel = if ($chosenSet.Count -eq 1) { "$($newest.Name)" } else { "$($chosenSet.Count) exports ($($chosenSet.Count) subscription$(if($chosenSet.Count -ne 1){'s'}))" }
+        $script:StatusText.Text = "Export ready: $exportLabel - latest data $ageStr. Click 'Scan Export' to begin (or 'Live Scan' for real-time)."
         return
     })
 $script:CancelScanButton.Add_Click({
@@ -5162,7 +5220,7 @@ $script:TenantButton.Add_Click({
             $tenantSize = if ($script:scanData.Auth.TenantSize) { " [$($script:scanData.Auth.TenantSize)]" } else { '' }
             $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan' to begin."
             # Clear any armed export from a previous connection
-            $script:ExportArmed = $false; $script:ArmedExport = $null; $script:ExportScanButton.Content = 'Cost Export Scan'
+            $script:ExportArmed = $false; $script:ArmedExports = @(); $script:ExportScanButton.Content = 'Cost Export Scan'
             # Show locked after successful selection
             $script:TenantButton.Content = "$($script:LockClosed) Commercial Tenant"
         }
@@ -5200,7 +5258,7 @@ $script:GovTenantButton.Add_Click({
             $tenantSize = if ($script:scanData.Auth.TenantSize) { " [$($script:scanData.Auth.TenantSize)]" } else { '' }
             $script:StatusText.Text = "Connected to $envLabel ($subCount subs$tenantSize). Click 'Scan' to begin."
             # Clear any armed export from a previous connection
-            $script:ExportArmed = $false; $script:ArmedExport = $null; $script:ExportScanButton.Content = 'Cost Export Scan'
+            $script:ExportArmed = $false; $script:ArmedExports = @(); $script:ExportScanButton.Content = 'Cost Export Scan'
             $script:GovTenantButton.Content = "$($script:LockClosed) Gov Tenant"
         }
         catch {

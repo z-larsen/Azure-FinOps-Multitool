@@ -85,12 +85,16 @@ function Get-MaccCommitment {
 
     # -- Step 2: List MACC lots per billing account ---------------------
     $lots = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $lotAccessDenied = $false   # set if the lots call is forbidden (403) for any account
     foreach ($ba in $billingAccounts) {
         $lotPath = "/providers/Microsoft.Billing/billingAccounts/$($ba.Name)/providers/Microsoft.Consumption/lots?api-version=2024-08-01"
         try {
             $lotResp = Invoke-AzRestMethodWithRetry -Path $lotPath -Method GET
             if ($lotResp.StatusCode -ne 200) {
-                # 404 simply means no lots exist for this account — not an error.
+                # 403/401 = you can see the billing account but lack the billing
+                # role to read its consumption lots (the MACC). 404 = no lots
+                # exist for this account, which is genuinely "no MACC."
+                if ($lotResp.StatusCode -in @(401, 403)) { $lotAccessDenied = $true }
                 continue
             }
             $lotData = ($lotResp.Content | ConvertFrom-Json)
@@ -124,6 +128,7 @@ function Get-MaccCommitment {
                 })
             }
         } catch {
+            if ("$($_.Exception.Message)" -match '403|Forbidden|Authorization|AuthorizationFailed|access') { $lotAccessDenied = $true }
             Write-Warning "  MACC lot query failed for account $($ba.DisplayName): $($_.Exception.Message)"
         }
     }
@@ -132,6 +137,9 @@ function Get-MaccCommitment {
         $result.HasMacc = $true
         $result.Commitments = @($lots)
         Write-Host "  Found $($lots.Count) MACC commitment lot(s)." -ForegroundColor Green
+    } elseif ($lotAccessDenied) {
+        $result.Reason = 'MACC data could not be read due to insufficient billing permissions. You can see the EA/MCA billing account, but reading its consumption commitment (lots) requires a billing role: for EA, Enterprise Administrator (read-only) or EA Reader at the enrollment scope; for MCA, Billing account reader or Billing profile reader. Standard subscription RBAC (Owner/Contributor/Reader) does not grant access. Ask a billing admin to assign one of these roles, then re-scan. Reference: https://learn.microsoft.com/azure/cost-management-billing/manage/understand-mca-roles'
+        Write-Host "  MACC: billing access denied reading consumption lots." -ForegroundColor Yellow
     } else {
         $result.Reason = 'No MACC commitment found on the reachable EA/MCA billing account(s). This agreement may not include a consumption commitment.'
         Write-Host "  MACC: no consumption-commitment lots found." -ForegroundColor DarkGray
