@@ -118,7 +118,7 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Azure FinOps Multitool" FontSize="19" Foreground="White" FontWeight="Bold"/>
-                        <TextBlock x:Name="VersionLabel" Text="v2.11.3" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
+                        <TextBlock x:Name="VersionLabel" Text="v2.14.0" FontSize="10.5" Foreground="#A0C4E8" Margin="1,0,0,0"/>
                     </StackPanel>
                     <Border Background="#005A9E" CornerRadius="2" Width="1" Margin="18,4,14,4" VerticalAlignment="Stretch"/>
                     <TextBlock x:Name="TenantLabel" Text="" FontSize="12" Foreground="#B3D7F2" VerticalAlignment="Center"/>
@@ -784,10 +784,19 @@
                     </ScrollViewer>
                 </TabItem>
 
-                <!-- Export Setup Tab ============================ -->
-                <TabItem Header="  Export Setup  " FontSize="13">
+                <!-- Setup Tab ============================ -->
+                <TabItem Header="  Setup  " FontSize="13">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
                         <StackPanel x:Name="ExportSetupPanel" MaxWidth="900" HorizontalAlignment="Left">
+
+                            <!-- Permissions needed (rendered at runtime) -->
+                            <TextBlock Text="Permissions Needed to Run a Comprehensive Scan" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,8">
+                                <Run Text="A full FinOps scan reads cost, commitments, budgets, governance, and billing data. The roles below are grouped by what each part of the scan needs and by your "/><Run Text="Microsoft contract type" FontWeight="SemiBold"/><Run Text=". Standard subscription RBAC (Owner/Contributor/Reader) covers resource and most cost data, but reservation, savings plan, and MACC data are billing-scoped and need a billing role. This list is generated at runtime."/>
+                            </TextBlock>
+                            <StackPanel x:Name="PermissionsModelPanel" Margin="0,0,0,20"/>
+
+                            <Border Height="1" Background="#E0E0E0" Margin="0,0,0,18"/>
 
                             <TextBlock Text="Set Up a Cost Export Scan" Style="{StaticResource SectionHeader}"/>
                             <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="#444" Margin="0,0,0,8">

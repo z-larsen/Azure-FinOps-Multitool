@@ -547,11 +547,12 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.13.1'
+$script:AppVersion = '2.14.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
 $modulePath = Join-Path $PSScriptRoot 'modules'
+. (Join-Path $modulePath 'Get-FinOpsPermissionModel.ps1')
 . (Join-Path $modulePath 'Initialize-Scanner.ps1')
 . (Join-Path $modulePath 'Get-TenantHierarchy.ps1')
 . (Join-Path $modulePath 'Get-ContractInfo.ps1')
@@ -640,7 +641,7 @@ $controls = @(
     'ResourcesPanel', 'ResourcesFinOpsPanel', 'ResourcesCostPanel',
     'ResourcesRatePanel', 'ResourcesGovernancePanel', 'ResourcesToolsPanel',
     # Export Setup
-    'ExportSetupPanel', 'ExportSetupLinksPanel',
+    'ExportSetupPanel', 'ExportSetupLinksPanel', 'PermissionsModelPanel',
     # Billing
     'BillingAccessNote', 'BillingAccountsGrid', 'BillingProfilesGrid',
     'InvoiceSectionsGrid', 'EADeptHeader', 'EADeptGrid', 'CostAllocationGrid',
@@ -3100,6 +3101,9 @@ function Populate-CommitmentSection {
         if ($commitRows.Count -gt 0) {
             $script:CommitmentGrid.ItemsSource = @($commitRows)
         }
+        elseif ($d.Commitments.AccessDenied) {
+            $script:CommitmentGrid.ItemsSource = @([PSCustomObject]@{ Status = $d.Commitments.AccessDeniedReason })
+        }
         else {
             $script:CommitmentGrid.ItemsSource = @([PSCustomObject]@{ Status = 'No active reservations or savings plans found.' })
         }
@@ -3368,6 +3372,83 @@ function Populate-ResourcesTab {
     foreach ($item in $toolLinks) {
         $script:ResourcesToolsPanel.Children.Add((New-LinkBlock -Text $item[0] -Url $item[1] -Description $item[2])) | Out-Null
     }
+}
+
+#-----------------------------------------------------------------------
+# SETUP TAB - PERMISSIONS SECTION (rendered at runtime)
+#-----------------------------------------------------------------------
+function Populate-PermissionsSection {
+    if (-not $script:PermissionsModelPanel) { return }
+    $script:PermissionsModelPanel.Children.Clear()
+
+    $model = Get-FinOpsPermissionModel
+    $brush = [System.Windows.Media.BrushConverter]::new()
+
+    foreach ($cap in $model.Capabilities) {
+        $card = [System.Windows.Controls.Border]::new()
+        $card.Background = $brush.ConvertFromString('#F7F9FB')
+        $card.BorderBrush = $brush.ConvertFromString('#DCE4EC')
+        $card.BorderThickness = [System.Windows.Thickness]::new(1)
+        $card.CornerRadius = [System.Windows.CornerRadius]::new(4)
+        $card.Padding = [System.Windows.Thickness]::new(12)
+        $card.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+
+        $inner = [System.Windows.Controls.StackPanel]::new()
+
+        $title = [System.Windows.Controls.TextBlock]::new()
+        $title.Text = $cap.Name
+        $title.FontSize = 13.5
+        $title.FontWeight = [System.Windows.FontWeights]::SemiBold
+        $title.Foreground = $brush.ConvertFromString('#0078D4')
+        $title.TextWrapping = [System.Windows.TextWrapping]::Wrap
+        $inner.Children.Add($title) | Out-Null
+
+        $desc = [System.Windows.Controls.TextBlock]::new()
+        $desc.Text = $cap.Description
+        $desc.FontSize = 11.5
+        $desc.Foreground = $brush.ConvertFromString('#666')
+        $desc.TextWrapping = [System.Windows.TextWrapping]::Wrap
+        $desc.Margin = [System.Windows.Thickness]::new(0, 2, 0, 6)
+        $inner.Children.Add($desc) | Out-Null
+
+        # Common baseline (if present)
+        if ($cap.Roles.Contains('Common')) {
+            $common = [System.Windows.Controls.TextBlock]::new()
+            $common.FontSize = 12
+            $common.TextWrapping = [System.Windows.TextWrapping]::Wrap
+            $common.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+            $common.Inlines.Add((New-Object System.Windows.Documents.Run -Property @{ Text = 'Baseline: '; FontWeight = [System.Windows.FontWeights]::SemiBold }))
+            $common.Inlines.Add([string]$cap.Roles['Common'])
+            $inner.Children.Add($common) | Out-Null
+        }
+
+        # Per-contract-type rows
+        foreach ($ctKey in $model.ContractTypes.Keys) {
+            if (-not $cap.Roles.Contains($ctKey)) { continue }
+            $row = [System.Windows.Controls.TextBlock]::new()
+            $row.FontSize = 12
+            $row.Foreground = $brush.ConvertFromString('#333')
+            $row.TextWrapping = [System.Windows.TextWrapping]::Wrap
+            $row.Margin = [System.Windows.Thickness]::new(12, 0, 0, 2)
+            $row.Inlines.Add((New-Object System.Windows.Documents.Run -Property @{ Text = "$($model.ContractTypes[$ctKey]): "; FontWeight = [System.Windows.FontWeights]::SemiBold }))
+            $row.Inlines.Add([string]$cap.Roles[$ctKey])
+            $inner.Children.Add($row) | Out-Null
+        }
+
+        $card.Child = $inner
+        $script:PermissionsModelPanel.Children.Add($card) | Out-Null
+    }
+
+    # Reference link
+    $refPanel = [System.Windows.Controls.TextBlock]::new()
+    $refPanel.FontSize = 12
+    $refPanel.Margin = [System.Windows.Thickness]::new(0, 2, 0, 0)
+    $refLink = [System.Windows.Documents.Hyperlink]::new()
+    $refLink.Inlines.Add('Understand Microsoft billing roles (EA / MCA / CSP)')
+    $refLink.NavigateUri = [Uri]::new($model.Reference)
+    $refLink.Add_RequestNavigate({ Start-Process $_.Uri.AbsoluteUri })
+    $refPanel.Inlines.Add($refLink)
+    $script:PermissionsModelPanel.Children.Add($refPanel) | Out-Null
 }
 
 #-----------------------------------------------------------------------
@@ -5918,6 +5999,7 @@ Write-Host ""
 
 # Populate static guidance tabs once at load (no scan required)
 try { Populate-ExportSetupTab } catch { Write-Warning "Populate-ExportSetupTab failed: $($_.Exception.Message)" }
+try { Populate-PermissionsSection } catch { Write-Warning "Populate-PermissionsSection failed: $($_.Exception.Message)" }
 
 $window.ShowDialog() | Out-Null
 
