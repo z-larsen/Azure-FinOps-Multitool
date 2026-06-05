@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.16.0'
+$script:AppVersion = '2.16.1'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -5202,17 +5202,24 @@ $script:ExportScanButton.Add_Click({
         # scope. The definition is invisible, but the blobs land in a storage
         # account we can read. Reconstruct those exports from the blob layout
         # and merge them in (deduped against control-plane results).
-        try {
-            $knownKeys = @{}
-            foreach ($e in $exports) {
-                if ($e.StorageResourceId -and $e.Container -and $e.Name) {
-                    $knownKeys[("$($e.StorageResourceId)|$($e.Container)|$($e.Name)").ToLowerInvariant()] = $true
+        #
+        # Only runs as a FALLBACK when control plane found nothing - that's the
+        # cross-tenant/orphaned signature. In the normal single-tenant case
+        # (control plane works) this is skipped, so we don't pay the per-sub
+        # storage-enumeration cost on every scan for a rare capability.
+        if ($exports.Count -eq 0) {
+            try {
+                $knownKeys = @{}
+                foreach ($e in $exports) {
+                    if ($e.StorageResourceId -and $e.Container -and $e.Name) {
+                        $knownKeys[("$($e.StorageResourceId)|$($e.Container)|$($e.Name)").ToLowerInvariant()] = $true
+                    }
                 }
+                $storageExports = @(Find-CostExportFromStorage -Subscriptions $subs -Environment $env -KnownKeys $knownKeys)
+                if ($storageExports.Count -gt 0) { $exports = @($exports) + $storageExports }
             }
-            $storageExports = @(Find-CostExportFromStorage -Subscriptions $subs -Environment $env -KnownKeys $knownKeys)
-            if ($storageExports.Count -gt 0) { $exports = @($exports) + $storageExports }
+            catch { Write-Warning "Storage-first export discovery failed: $($_.Exception.Message)" }
         }
-        catch { Write-Warning "Storage-first export discovery failed: $($_.Exception.Message)" }
 
         $csvExports = @($exports | Where-Object { -not $_.Format -or $_.Format -match 'csv' })
         $parquetOnly = @($exports | Where-Object { $_.Format -and $_.Format -notmatch 'csv' })
