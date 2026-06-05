@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.16.1'
+$script:AppVersion = '2.16.2'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -5203,23 +5203,22 @@ $script:ExportScanButton.Add_Click({
         # account we can read. Reconstruct those exports from the blob layout
         # and merge them in (deduped against control-plane results).
         #
-        # Only runs as a FALLBACK when control plane found nothing - that's the
-        # cross-tenant/orphaned signature. In the normal single-tenant case
-        # (control plane works) this is skipped, so we don't pay the per-sub
-        # storage-enumeration cost on every scan for a rare capability.
-        if ($exports.Count -eq 0) {
-            try {
-                $knownKeys = @{}
-                foreach ($e in $exports) {
-                    if ($e.StorageResourceId -and $e.Container -and $e.Name) {
-                        $knownKeys[("$($e.StorageResourceId)|$($e.Container)|$($e.Name)").ToLowerInvariant()] = $true
-                    }
+        # Always runs (not just when control plane is empty): the common
+        # cross-tenant case is MIXED - control plane surfaces some subs'
+        # exports while the MG-scoped hub export stays invisible. The tax is
+        # modest (~1 ARM call/sub + 1 container-list/storage-acct; blob-listing
+        # only on accounts that actually have an export-named container).
+        try {
+            $knownKeys = @{}
+            foreach ($e in $exports) {
+                if ($e.StorageResourceId -and $e.Container -and $e.Name) {
+                    $knownKeys[("$($e.StorageResourceId)|$($e.Container)|$($e.Name)").ToLowerInvariant()] = $true
                 }
-                $storageExports = @(Find-CostExportFromStorage -Subscriptions $subs -Environment $env -KnownKeys $knownKeys)
-                if ($storageExports.Count -gt 0) { $exports = @($exports) + $storageExports }
             }
-            catch { Write-Warning "Storage-first export discovery failed: $($_.Exception.Message)" }
+            $storageExports = @(Find-CostExportFromStorage -Subscriptions $subs -Environment $env -KnownKeys $knownKeys)
+            if ($storageExports.Count -gt 0) { $exports = @($exports) + $storageExports }
         }
+        catch { Write-Warning "Storage-first export discovery failed: $($_.Exception.Message)" }
 
         $csvExports = @($exports | Where-Object { -not $_.Format -or $_.Format -match 'csv' })
         $parquetOnly = @($exports | Where-Object { $_.Format -and $_.Format -notmatch 'csv' })
