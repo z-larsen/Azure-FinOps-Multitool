@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.15.1'
+$script:AppVersion = '2.16.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -5187,9 +5187,32 @@ $script:ExportScanButton.Add_Click({
         $script:StatusText.Text = 'Detecting Cost Management exports...'
         [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
 
+        # Enumerate exports at subscription, management-group, and billing-
+        # account scopes. Landing-zone FinOps hubs commonly define the export
+        # at an MG / billing scope (to capture all child subs) while delivering
+        # into one hub storage account, so a subscription-only scan misses it.
         $exports = @()
-        try { $exports = @(Find-CostExport -Subscriptions $subs -Environment $env) }
+        try { $exports = @(Find-CostExport -Subscriptions $subs -Environment $env -IncludeManagementGroups -IncludeBillingAccounts) }
         catch { Write-Warning "Export detection failed: $($_.Exception.Message)" }
+
+        # Storage-first discovery: some exports can't be found via Cost
+        # Management at all from this tenant - e.g. a hub export defined at a
+        # customer's management group (in the customer's tenant) and delivered
+        # cross-tenant via Azure Lighthouse, which only delegates subscription
+        # scope. The definition is invisible, but the blobs land in a storage
+        # account we can read. Reconstruct those exports from the blob layout
+        # and merge them in (deduped against control-plane results).
+        try {
+            $knownKeys = @{}
+            foreach ($e in $exports) {
+                if ($e.StorageResourceId -and $e.Container -and $e.Name) {
+                    $knownKeys[("$($e.StorageResourceId)|$($e.Container)|$($e.Name)").ToLowerInvariant()] = $true
+                }
+            }
+            $storageExports = @(Find-CostExportFromStorage -Subscriptions $subs -Environment $env -KnownKeys $knownKeys)
+            if ($storageExports.Count -gt 0) { $exports = @($exports) + $storageExports }
+        }
+        catch { Write-Warning "Storage-first export discovery failed: $($_.Exception.Message)" }
 
         $csvExports = @($exports | Where-Object { -not $_.Format -or $_.Format -match 'csv' })
         $parquetOnly = @($exports | Where-Object { $_.Format -and $_.Format -notmatch 'csv' })
@@ -5242,7 +5265,8 @@ $script:ExportScanButton.Add_Click({
                 } -DisplayScript {
                     param($e)
                     $age = if ($e.LastRunDate) { "$([int]((Get-Date) - $e.LastRunDate).TotalDays)d old - $($e.LastRunDate.ToString('yyyy-MM-dd'))" } else { 'run date unknown' }
-                    "$($e.Name)  [$($e.Type)]  -  $($e.SubName)  ($age)"
+                    $scopeNote = if ($e.ScopeKind -and $e.ScopeKind -ne 'Subscription' -and $e.ScopeLabel) { "  {$($e.ScopeLabel)}" } else { '' }
+                    "$($e.Name)  [$($e.Type)]  -  $($e.SubName)$scopeNote  ($age)"
                 } -ParentWindow $window)
             if (-not $picked -or $picked.Count -eq 0) { $script:ExportScanButton.IsEnabled = $true; $script:ScanButton.IsEnabled = $true; $script:StatusText.Text = 'Ready.'; return }
             $chosenSet = @(Select-NewestExportPerSub -Exports $picked)

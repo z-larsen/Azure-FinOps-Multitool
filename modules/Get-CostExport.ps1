@@ -62,6 +62,46 @@ function Invoke-StorageBlobRest {
     }
 }
 
+# -- Download a blob's raw bytes (binary-safe) ----------------------------
+# Invoke-RestMethod decodes a response body as text using the content-type
+# charset, which corrupts binary payloads - notably '.csv.gz' parts, where the
+# mangled bytes can no longer be gunzipped ("unsupported compression method").
+# Use HttpClient to read the exact bytes so gzip and plain CSV both decode.
+function Get-StorageBlobBytes {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [string]$StorageToken,
+        [int]$TimeoutSeconds = 120
+    )
+    if (-not $StorageToken) {
+        try { $StorageToken = Get-PlainAccessToken -ResourceUrl 'https://storage.azure.com' }
+        catch { Write-Warning "  Could not acquire storage token: $($_.Exception.Message)"; return $null }
+    }
+    $client = $null; $req = $null; $resp = $null
+    try {
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $req = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $Uri)
+        [void]$req.Headers.TryAddWithoutValidation('Authorization', "Bearer $StorageToken")
+        [void]$req.Headers.TryAddWithoutValidation('x-ms-version', '2021-08-06')
+        $resp = $client.SendAsync($req).GetAwaiter().GetResult()
+        if (-not $resp.IsSuccessStatusCode) {
+            Write-Warning "  Storage blob GET failed (HTTP $([int]$resp.StatusCode)): $Uri"
+            return $null
+        }
+        $data = $resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        # Unary comma stops PowerShell from unrolling the byte[] into a stream
+        # of individual bytes (which the caller would receive as an Object[]).
+        return , $data
+    }
+    catch { Write-Warning "  Storage blob GET error: $($_.Exception.Message)"; return $null }
+    finally {
+        if ($resp) { $resp.Dispose() }
+        if ($req) { $req.Dispose() }
+        if ($client) { $client.Dispose() }
+    }
+}
+
 # -- Flat blob listing under a prefix -------------------------------------
 # Lists every blob under $Prefix (no delimiter = recursive). Robust to two
 # quirks: (1) Invoke-RestMethod often returns the list XML as a raw string
@@ -115,25 +155,79 @@ function Get-StorageBlobList {
     return [PSCustomObject]@{ Blobs = $out; Listed = $listed }
 }
 
+# -- List the containers in a storage account (data plane) ----------------
+# Account-level GET ...?comp=list. Used by storage-first export discovery so
+# we can find exports whose control-plane definition lives in another tenant
+# (e.g. a management-group-scoped FinOps hub export delivered cross-tenant via
+# Azure Lighthouse) but whose blobs we can still read.
+function Get-StorageContainerList {
+    param(
+        [Parameter(Mandatory)][string]$BlobBase,
+        [string]$StorageToken
+    )
+    $out    = [System.Collections.Generic.List[string]]::new()
+    $marker = $null
+    $listed = $false
+    do {
+        $listUri = "$BlobBase/?comp=list"
+        if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
+        $resp = Invoke-StorageBlobRest -Uri $listUri -StorageToken $StorageToken
+        if (-not $resp) { break }
+        $listed = $true
+
+        $doc = $null
+        if ($resp -is [System.Xml.XmlDocument]) { $doc = $resp }
+        elseif ($resp -is [string]) {
+            $txt = $resp
+            $i = $txt.IndexOf('<?xml')
+            if ($i -lt 0) { $i = $txt.IndexOf('<EnumerationResults') }
+            if ($i -gt 0) { $txt = $txt.Substring($i) }
+            try { $doc = New-Object System.Xml.XmlDocument; $doc.LoadXml($txt) } catch { $doc = $null }
+        }
+        if (-not $doc -or -not $doc.EnumerationResults) { break }
+
+        $nodes = @()
+        if ($doc.EnumerationResults.Containers -and $doc.EnumerationResults.Containers.Container) {
+            $nodes = @($doc.EnumerationResults.Containers.Container)
+        }
+        foreach ($c in $nodes) { if ($c.Name) { [void]$out.Add([string]$c.Name) } }
+
+        $marker = $null
+        if ($doc.EnumerationResults.NextMarker) { $marker = ([string]$doc.EnumerationResults.NextMarker).Trim() }
+    } while ($marker)
+
+    return [PSCustomObject]@{ Containers = $out; Listed = $listed }
+}
+
 # -- Decompress a gzip blob body into CSV text ----------------------------
 # Newer Cost Management exports can write '.csv.gz' parts. Invoke-RestMethod
 # hands these back as bytes (or a mojibake string); gunzip into UTF-8 text.
 function Expand-GzipText {
     param($Content)
+    $inStream = $null; $gzip = $null; $outStream = $null
     try {
         $bytes = if ($Content -is [byte[]]) { $Content }
         elseif ($Content -is [string]) { [System.Text.Encoding]::GetEncoding('ISO-8859-1').GetBytes($Content) }
+        elseif ($Content -is [System.Collections.IEnumerable]) { [byte[]]@($Content) }
         else { return $null }
+        # CopyTo a buffer (rather than StreamReader.ReadToEnd) because the
+        # latter can return empty on large GZipStreams, and CopyTo also reads
+        # all members of a concatenated/multi-member gzip.
         $inStream  = New-Object System.IO.MemoryStream(, $bytes)
         $gzip      = New-Object System.IO.Compression.GZipStream($inStream, [System.IO.Compression.CompressionMode]::Decompress)
-        $reader    = New-Object System.IO.StreamReader($gzip, [System.Text.Encoding]::UTF8)
-        $text      = $reader.ReadToEnd()
-        $reader.Dispose(); $gzip.Dispose(); $inStream.Dispose()
-        return $text
+        $outStream = New-Object System.IO.MemoryStream
+        $gzip.CopyTo($outStream)
+        $outBytes = $outStream.ToArray()
+        return [System.Text.Encoding]::UTF8.GetString($outBytes)
     }
     catch {
         Write-Warning "  Could not gunzip export part: $($_.Exception.Message)"
         return $null
+    }
+    finally {
+        if ($gzip) { $gzip.Dispose() }
+        if ($outStream) { $outStream.Dispose() }
+        if ($inStream) { $inStream.Dispose() }
     }
 }
 
@@ -193,19 +287,103 @@ function ConvertFrom-ExportTagString {
     return $out
 }
 
+# -- Build one export descriptor from a definition + its run history ------
+# Shared by every scope (subscription / management group / billing account).
+# Resolves the latest run date from run history and the subscription that
+# owns the destination storage (so the data reader has a sub + storage role
+# even for management-group / billing-scoped exports that deliver into a
+# central FinOps hub storage account).
+function ConvertTo-CostExportRecord {
+    param(
+        [Parameter(Mandatory)][object]$Exp,
+        [Parameter(Mandatory)][string]$Scope,
+        [string]$ApiVer = '2023-08-01',
+        [string]$ScopeKind = 'Subscription',
+        [string]$ScopeLabel,
+        [string]$FallbackSubId,
+        [string]$FallbackSubName
+    )
+
+    $def    = $Exp.properties.definition
+    $dest   = $Exp.properties.deliveryInfo.destination
+    $format = if ($Exp.properties.format) { $Exp.properties.format } else { 'Csv' }
+
+    # Resolve the latest run date from run history (best-effort)
+    $lastRun = $null
+    try {
+        $rhPath = "$Scope/providers/Microsoft.CostManagement/exports/$($Exp.name)/runHistory?api-version=$ApiVer"
+        $rh = Invoke-AzRestMethodWithRetry -Path $rhPath -Method GET
+        if ($rh -and $rh.StatusCode -eq 200) {
+            $runs = ($rh.Content | ConvertFrom-Json).value
+            if ($runs) {
+                $dates = $runs | ForEach-Object {
+                    $p = $_.properties
+                    if ($p.processingEndTime) { [datetime]$p.processingEndTime }
+                    elseif ($p.submittedTime) { [datetime]$p.submittedTime }
+                } | Where-Object { $_ } | Sort-Object -Descending
+                if ($dates) { $lastRun = $dates[0] }
+            }
+        }
+    }
+    catch { }
+
+    # Pull the storage account's subscription out of the destination id so
+    # the data reader can build its blob prefix + use the storage role.
+    $subId   = $FallbackSubId
+    $subName = $FallbackSubName
+    if ($dest.resourceId -match '/subscriptions/([0-9a-fA-F-]{36})/') {
+        $subId = $Matches[1]
+        if (-not $subName) { $subName = $ScopeLabel }
+    }
+
+    [PSCustomObject]@{
+        Name              = $Exp.name
+        SubId             = $subId
+        SubName           = if ($subName) { $subName } else { $ScopeLabel }
+        Scope             = $Scope
+        ScopeKind         = $ScopeKind
+        ScopeLabel        = $ScopeLabel
+        Type              = $def.type
+        Granularity       = $def.dataSet.granularity
+        Format            = $format
+        Partitioned       = [bool]$Exp.properties.partitionData
+        StorageResourceId = $dest.resourceId
+        Container         = $dest.container
+        RootFolder        = $dest.rootFolderPath
+        LastRunDate       = $lastRun
+    }
+}
+
 # -- Discover configured Cost Management Exports --------------------------
-# Enumerates exports at each selected subscription scope. Returns one
-# descriptor per export plus its newest run date (for the freshness prompt).
+# Enumerates exports at the selected subscription scopes and, optionally, at
+# management-group and billing-account scopes. Landing-zone FinOps hubs often
+# define the export at a management group or billing account (so it captures
+# all child subscriptions) while delivering into one hub storage account - so
+# a subscription-only scan misses them even when you can read the blobs.
+# Returns one descriptor per export plus its newest run date.
 function Find-CostExport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object[]]$Subscriptions,
-        [string]$Environment = 'AzureCloud'
+        [string]$Environment = 'AzureCloud',
+        [switch]$IncludeManagementGroups,
+        [switch]$IncludeBillingAccounts
     )
 
     $apiVer = '2023-08-01'
     $found  = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $seen   = @{}
 
+    $addRecord = {
+        param($rec)
+        if (-not $rec) { return }
+        $key = ("$($rec.Scope)|$($rec.Name)").ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { return }
+        $seen[$key] = $true
+        [void]$found.Add($rec)
+    }
+
+    # -- Subscription-scoped exports (each selected subscription) ---------
     foreach ($sub in $Subscriptions) {
         $scope = "/subscriptions/$($sub.Id)"
         $path  = "$scope/providers/Microsoft.CostManagement/exports?api-version=$apiVer"
@@ -214,53 +392,176 @@ function Find-CostExport {
 
         $list = $null
         try { $list = ($resp.Content | ConvertFrom-Json).value } catch { continue }
-        if (-not $list) { continue }
+        foreach ($exp in @($list)) {
+            & $addRecord (ConvertTo-CostExportRecord -Exp $exp -Scope $scope -ApiVer $apiVer -ScopeKind 'Subscription' -ScopeLabel $sub.Name -FallbackSubId $sub.Id -FallbackSubName $sub.Name)
+        }
+    }
 
-        foreach ($exp in $list) {
-            $def    = $exp.properties.definition
-            $dest   = $exp.properties.deliveryInfo.destination
-            $format = if ($exp.properties.format) { $exp.properties.format } else { 'Csv' }
-
-            # Resolve the latest run date from run history (best-effort)
-            $lastRun = $null
-            try {
-                $rhPath = "$scope/providers/Microsoft.CostManagement/exports/$($exp.name)/runHistory?api-version=$apiVer"
-                $rh = Invoke-AzRestMethodWithRetry -Path $rhPath -Method GET
-                if ($rh -and $rh.StatusCode -eq 200) {
-                    $runs = ($rh.Content | ConvertFrom-Json).value
-                    if ($runs) {
-                        $dates = $runs | ForEach-Object {
-                            $p = $_.properties
-                            if ($p.processingEndTime) { [datetime]$p.processingEndTime }
-                            elseif ($p.submittedTime) { [datetime]$p.submittedTime }
-                        } | Where-Object { $_ } | Sort-Object -Descending
-                        if ($dates) { $lastRun = $dates[0] }
-                    }
-                }
-            }
+    # -- Management-group-scoped exports ----------------------------------
+    if ($IncludeManagementGroups) {
+        $mgs = @()
+        try {
+            $mgResp = Invoke-AzRestMethodWithRetry -Path '/providers/Microsoft.Management/managementGroups?api-version=2020-05-01' -Method GET
+            if ($mgResp -and $mgResp.StatusCode -eq 200) { $mgs = @(($mgResp.Content | ConvertFrom-Json).value) }
+        }
+        catch { }
+        foreach ($mg in $mgs) {
+            $mgId = $mg.name
+            if (-not $mgId) { continue }
+            $scope = "/providers/Microsoft.Management/managementGroups/$mgId"
+            $resp  = $null
+            try { $resp = Invoke-AzRestMethodWithRetry -Path "$scope/providers/Microsoft.CostManagement/exports?api-version=$apiVer" -Method GET }
             catch { }
+            if (-not $resp -or $resp.StatusCode -ne 200) { continue }
+            $list = $null
+            try { $list = ($resp.Content | ConvertFrom-Json).value } catch { continue }
+            $label = if ($mg.properties.displayName) { "MG: $($mg.properties.displayName)" } else { "MG: $mgId" }
+            foreach ($exp in @($list)) {
+                & $addRecord (ConvertTo-CostExportRecord -Exp $exp -Scope $scope -ApiVer $apiVer -ScopeKind 'ManagementGroup' -ScopeLabel $label)
+            }
+        }
+    }
 
-            [void]$found.Add([PSCustomObject]@{
-                Name              = $exp.name
-                SubId             = $sub.Id
-                SubName           = $sub.Name
-                Scope             = $scope
-                Type              = $def.type
-                Granularity       = $def.dataSet.granularity
-                Format            = $format
-                Partitioned       = [bool]$exp.properties.partitionData
-                StorageResourceId = $dest.resourceId
-                Container         = $dest.container
-                RootFolder        = $dest.rootFolderPath
-                LastRunDate       = $lastRun
-            })
+    # -- Billing-account-scoped exports -----------------------------------
+    if ($IncludeBillingAccounts) {
+        $accts = @()
+        try {
+            $baResp = Invoke-AzRestMethodWithRetry -Path '/providers/Microsoft.Billing/billingAccounts?api-version=2020-05-01' -Method GET
+            if ($baResp -and $baResp.StatusCode -eq 200) { $accts = @(($baResp.Content | ConvertFrom-Json).value) }
+        }
+        catch { }
+        foreach ($ba in $accts) {
+            $baId = $ba.name
+            if (-not $baId) { continue }
+            $scope = "/providers/Microsoft.Billing/billingAccounts/$baId"
+            $resp  = $null
+            try { $resp = Invoke-AzRestMethodWithRetry -Path "$scope/providers/Microsoft.CostManagement/exports?api-version=$apiVer" -Method GET }
+            catch { }
+            if (-not $resp -or $resp.StatusCode -ne 200) { continue }
+            $list = $null
+            try { $list = ($resp.Content | ConvertFrom-Json).value } catch { continue }
+            $label = if ($ba.properties.displayName) { "Billing: $($ba.properties.displayName)" } else { "Billing: $baId" }
+            foreach ($exp in @($list)) {
+                & $addRecord (ConvertTo-CostExportRecord -Exp $exp -Scope $scope -ApiVer $apiVer -ScopeKind 'BillingAccount' -ScopeLabel $label)
+            }
         }
     }
 
     return $found
 }
 
-# -- Read an export's newest CSV data into normalized rows ----------------
+# -- Storage-first export discovery (control-plane blind spots) -----------
+# Some exports cannot be discovered through Cost Management at all from this
+# tenant - most commonly a FinOps hub export defined at a customer's
+# management group (in the customer's tenant) and delivered cross-tenant via
+# Azure Lighthouse, which only delegates *subscription* scope. The export
+# definition is invisible, but the delivered blobs land in a storage account
+# in a subscription we CAN read (Storage Blob Data Reader).
+#
+# This scans storage accounts in the selected subscriptions, probes likely
+# cost-export containers, and reconstructs export descriptors from the blob
+# layout ({root}/{name}/{dateRange}/{runId}/*.csv[.gz]) so they appear in the
+# picker and can be read by Get-CostExportData. Records carry the storage
+# subscription so the data reader has a sub + storage role.
+function Find-CostExportFromStorage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Subscriptions,
+        [string]$Environment = 'AzureCloud',
+        # Skip these storage account + container + name combos (already found
+        # via control plane) so we don't list the same export twice.
+        [hashtable]$KnownKeys
+    )
+
+    if (-not $KnownKeys) { $KnownKeys = @{} }
+    $suffix = Get-ExportBlobSuffix -Environment $Environment
+    $found  = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $seen   = @{}
+
+    $token = $null
+    try { $token = Get-PlainAccessToken -ResourceUrl 'https://storage.azure.com' }
+    catch { Write-Warning "Storage-first discovery: token error: $($_.Exception.Message)"; return $found }
+
+    # Only probe containers whose name looks like a cost-export drop. Keeps the
+    # scan fast and avoids listing unrelated data (diagnostics, backups, etc.).
+    $containerPattern = 'export|msexports|ingestion|finops|cost|focus'
+
+    $stores = @(Get-ExportStorageCandidates -Subscriptions $Subscriptions)
+    foreach ($sa in $stores) {
+        $blobBase = "https://$($sa.Name).$suffix"
+
+        $cl = Get-StorageContainerList -BlobBase $blobBase -StorageToken $token
+        if (-not $cl.Listed) { continue }
+        $containers = @($cl.Containers | Where-Object { $_ -match $containerPattern })
+
+        foreach ($container in $containers) {
+            $listed = Get-StorageBlobList -BlobBase $blobBase -Container $container -Prefix '' -StorageToken $token
+            if (-not $listed.Listed) { continue }
+            $csvBlobs = @($listed.Blobs | Where-Object { $_.Name -match '\.csv(\.gz)?$' })
+            if ($csvBlobs.Count -eq 0) { continue }
+
+            # Group CSV parts by their export folder = path before the
+            # {dateRange} (YYYYMMDD-YYYYMMDD) token. The segment just before the
+            # date range is the export Name; everything earlier is the RootFolder.
+            $groups = @{}
+            foreach ($b in $csvBlobs) {
+                $m = [regex]::Match($b.Name, '^(?<folder>.*?)/(?<range>\d{8}-\d{8})/')
+                if (-not $m.Success) {
+                    # No date-range folder: treat the directory holding the CSV
+                    # as the export folder so flat layouts still surface.
+                    $dir = [System.IO.Path]::GetDirectoryName($b.Name) -replace '\\', '/'
+                    if (-not $dir) { continue }
+                    $folder = $dir
+                }
+                else { $folder = $m.Groups['folder'].Value }
+                if ([string]::IsNullOrWhiteSpace($folder)) { continue }
+                if (-not $groups.ContainsKey($folder)) { $groups[$folder] = [System.Collections.Generic.List[PSCustomObject]]::new() }
+                [void]$groups[$folder].Add($b)
+            }
+
+            foreach ($folder in $groups.Keys) {
+                $segs = @($folder.Trim('/') -split '/')
+                $name = $segs[-1]
+                $root = if ($segs.Count -gt 1) { ($segs[0..($segs.Count - 2)] -join '/') } else { '' }
+
+                $key = ("$($sa.ResourceId)|$container|$name").ToLowerInvariant()
+                if ($KnownKeys.ContainsKey($key) -or $seen.ContainsKey($key)) { continue }
+                $seen[$key] = $true
+
+                $parts   = $groups[$folder]
+                $lastRun = ($parts | ForEach-Object { $_.LastModified } | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1)
+                $partitioned = (@($parts | Where-Object { $_.Name -match 'part_' }).Count -gt 1)
+
+                # Infer the cost type from the folder name (best-effort, display only)
+                $type = if ($name -match 'amortiz') { 'AmortizedCost' }
+                elseif ($name -match 'actual') { 'ActualCost' }
+                elseif ($name -match 'focus') { 'FocusCost' }
+                else { 'Usage' }
+
+                [void]$found.Add([PSCustomObject]@{
+                    Name              = $name
+                    SubId             = $sa.SubId
+                    SubName           = $sa.SubName
+                    Scope             = $sa.ResourceId
+                    ScopeKind         = 'Storage'
+                    ScopeLabel        = "Storage: $($sa.Name)/$container"
+                    Type              = $type
+                    Granularity       = 'Daily'
+                    Format            = 'Csv'
+                    Partitioned       = $partitioned
+                    StorageResourceId = $sa.ResourceId
+                    Container         = $container
+                    RootFolder        = $root
+                    LastRunDate       = $lastRun
+                })
+            }
+        }
+    }
+
+    return $found
+}
+
+
 # Lists blobs under the export's folder, locates the newest run, downloads
 # the CSV (or manifest-referenced CSV parts), and returns normalized rows.
 function Get-CostExportData {
@@ -406,15 +707,16 @@ function Get-CostExportData {
     $firstHeader = @()
     foreach ($part in $runParts) {
         $blobUri = "$blobBase/$container/$([uri]::EscapeUriString($part.Name))"
-        $raw = Invoke-StorageBlobRest -Uri $blobUri -StorageToken $token
-        if (-not $raw) { continue }
+        $bytes = Get-StorageBlobBytes -Uri $blobUri -StorageToken $token
+        if (-not $bytes) { continue }
         $csvText = $null
         if ($part.Name -match '\.gz$') {
-            $csvText = Expand-GzipText -Content $raw
+            $csvText = Expand-GzipText -Content $bytes
         }
-        elseif ($raw -is [byte[]]) { $csvText = [System.Text.Encoding]::UTF8.GetString($raw) }
-        else { $csvText = $raw }
+        else { $csvText = [System.Text.Encoding]::UTF8.GetString($bytes) }
         if (-not $csvText) { continue }
+        # Strip a leading UTF-8 BOM so the header row parses cleanly.
+        if ($csvText.Length -gt 0 -and $csvText[0] -eq [char]0xFEFF) { $csvText = $csvText.Substring(1) }
 
         $parsed = @($csvText | ConvertFrom-Csv)
         if ($parsed.Count -eq 0) { continue }
