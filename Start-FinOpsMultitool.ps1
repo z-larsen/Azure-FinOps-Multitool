@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.16.3'
+$script:AppVersion = '2.17.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -562,6 +562,7 @@ $modulePath = Join-Path $PSScriptRoot 'modules'
 . (Join-Path $modulePath 'Get-CostByTag.ps1')
 . (Join-Path $modulePath 'Get-CostExport.ps1')
 . (Join-Path $modulePath 'Get-AHBOpportunities.ps1')
+. (Join-Path $modulePath 'Get-AhbVmSavingsRatio.ps1')
 . (Join-Path $modulePath 'Get-ReservationAdvice.ps1')
 . (Join-Path $modulePath 'Get-OptimizationAdvice.ps1')
 . (Join-Path $modulePath 'Get-TagRecommendations.ps1')
@@ -1277,9 +1278,11 @@ function Populate-OptimizationTab {
             $rc = Find-ResourceCost -Name $vm.name -SubscriptionId $vm.subscriptionId -ResourceGroup $vm.resourceGroup -ResourceType 'microsoft.compute/virtualmachines'
             $actual = if ($rc) { $rc.Actual } else { $null }
             $forecast = if ($rc) { $rc.Forecast } else { $null }
-            # AHB saves ~40% on Windows VM licensing component
-            $ahbActual = if ($actual) { [math]::Round($actual * 0.6, 2) } else { $null }
-            $ahbForecast = if ($forecast) { [math]::Round($forecast * 0.6, 2) } else { $null }
+            # AHB removes the Windows Server license premium -> post-AHB cost is the Linux-equivalent rate.
+            # Use the real per-SKU Windows/Linux rate delta from the Retail Prices API (falls back to ~40% off).
+            $ratio = Get-AhbVmSavingsRatio -VmSize $vm.vmSize -Region $vm.location
+            $ahbActual = if ($actual) { [math]::Round($actual * $ratio, 2) } else { $null }
+            $ahbForecast = if ($forecast) { [math]::Round($forecast * $ratio, 2) } else { $null }
             $ahbRows += [PSCustomObject]@{
                 Type             = 'Windows VM'
                 Name             = $vm.name
