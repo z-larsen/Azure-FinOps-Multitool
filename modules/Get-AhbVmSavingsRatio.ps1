@@ -26,21 +26,20 @@
 # Usage: Get-AhbVmSavingsRatio -VmSize 'Standard_D4as_v6' -Region 'eastus'
 ###########################################################################
 
-function Get-AhbVmSavingsRatio {
+function Get-AhbVmRates {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$VmSize,
         [Parameter(Mandatory)][string]$Region
     )
 
-    if (-not $script:AhbRatioCache) { $script:AhbRatioCache = @{} }
-    $fallback = 0.6  # ~40% off when live rates are unavailable
-    if ([string]::IsNullOrWhiteSpace($VmSize) -or [string]::IsNullOrWhiteSpace($Region)) { return $fallback }
+    if (-not $script:AhbRateCache) { $script:AhbRateCache = @{} }
+    if ([string]::IsNullOrWhiteSpace($VmSize) -or [string]::IsNullOrWhiteSpace($Region)) { return $null }
 
     $key = "$VmSize|$Region".ToLowerInvariant()
-    if ($script:AhbRatioCache.ContainsKey($key)) { return $script:AhbRatioCache[$key] }
+    if ($script:AhbRateCache.ContainsKey($key)) { return $script:AhbRateCache[$key] }
 
-    $ratio = $fallback
+    $result = $null
     try {
         $filter = "armRegionName eq '$Region' and armSkuName eq '$VmSize' and priceType eq 'Consumption' and serviceName eq 'Virtual Machines'"
         $url = "https://prices.azure.com/api/retail/prices?`$filter=$([uri]::EscapeDataString($filter))"
@@ -53,13 +52,33 @@ function Get-AhbVmSavingsRatio {
         $win = $items | Where-Object { $_.productName -match 'Windows' } | Select-Object -First 1
         $lin = $items | Where-Object { $_.productName -notmatch 'Windows' } | Select-Object -First 1
         if ($win -and $lin -and [double]$win.unitPrice -gt 0) {
-            $r = [double]$lin.unitPrice / [double]$win.unitPrice
-            if ($r -gt 0 -and $r -lt 1) { $ratio = [math]::Round($r, 4) }
+            $w = [double]$win.unitPrice
+            $l = [double]$lin.unitPrice
+            if ($l -gt 0 -and $l -lt $w) {
+                $result = [PSCustomObject]@{
+                    WindowsRate   = $w
+                    LinuxRate     = $l
+                    Ratio         = [math]::Round($l / $w, 4)
+                    HourlyPremium = [math]::Round($w - $l, 5)
+                }
+            }
         }
     } catch {
-        Write-Warning "  AHB ratio lookup failed for ${VmSize}/${Region}: $($_.Exception.Message)"
+        Write-Warning "  AHB rate lookup failed for ${VmSize}/${Region}: $($_.Exception.Message)"
     }
 
-    $script:AhbRatioCache[$key] = $ratio
-    return $ratio
+    $script:AhbRateCache[$key] = $result
+    return $result
+}
+
+function Get-AhbVmSavingsRatio {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VmSize,
+        [Parameter(Mandatory)][string]$Region
+    )
+
+    $rates = Get-AhbVmRates -VmSize $VmSize -Region $Region
+    if ($rates) { return $rates.Ratio }
+    return 0.6  # ~40% off fallback when live rates are unavailable
 }
