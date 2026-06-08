@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.18.1'
+$script:AppVersion = '2.18.2'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -4900,7 +4900,20 @@ $script:scanStages = @(
                     [void]$trendResults.Add((Get-CostExportData -Export $ex -Environment $script:scanData.Auth.Environment -MonthsBack 6))
                 }
                 $trendData = Merge-CostExportData -Results @($trendResults)
-                $script:scanData.CostTrend = ConvertTo-CostTrendFromExport -ExportData $trendData
+                $exportTrend = ConvertTo-CostTrendFromExport -ExportData $trendData
+
+                # A plain Month-to-date Cost Management export only contains the
+                # current billing month, so the export trend collapses to a single
+                # bar. Only FinOps Hub exports re-emit prior months. When fewer than
+                # two months are available, fall back to the live monthly Cost
+                # Management query (one lightweight MG-scope call) so the trend shows
+                # a real 6-month history instead of one flat month.
+                if ($exportTrend -and $exportTrend.HasData -and @($exportTrend.Months).Count -ge 2) {
+                    $script:scanData.CostTrend = $exportTrend
+                }
+                else {
+                    $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
+                }
             }
             else {
                 $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
