@@ -328,3 +328,165 @@ function Get-CostTrend {
         HasData        = ($sorted.Count -gt 0)
     }
 }
+
+###########################################################################
+# GET-COSTTRENDFORSCOPE
+# 6-month trend at a billing-account or management-group scope.
+###########################################################################
+# Purpose: Query Cost Management for the last 6 months of actual spend at a
+#          billing-account or management-group scope, returning the same shape
+#          as Get-CostTrend. Used when a cost export is scoped to a whole
+#          billing account (EA enrollment or MCA billing account) or a
+#          management group - the per-subscription live query is the wrong
+#          scope, but the billing/MG scope returns true org-wide history.
+#
+# Works for BOTH EA and MCA: the Cost Management query API path
+#   {scope}/providers/Microsoft.CostManagement/query
+# is identical for EA enrollments and MCA billing accounts. The Monthly
+# Sum aggregation grouped by SubscriptionId returns the month x subscription
+# matrix for either agreement type.
+#
+# ── Parameters ──────────────────────────────────────────────────
+# ScopePath          The billing/MG scope, e.g.
+#                    /providers/Microsoft.Billing/billingAccounts/{id} or
+#                    /providers/Microsoft.Management/managementGroups/{id}
+# ScopeLabel         Friendly label for logging (optional)
+###########################################################################
+function Get-CostTrendForScope {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScopePath,
+        [string]$ScopeLabel
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ScopePath)) {
+        return [PSCustomObject]@{ Months = @(); BySubscription = @{}; HasData = $false }
+    }
+
+    $label = if ($ScopeLabel) { $ScopeLabel } else { $ScopePath }
+    Write-Host "  Querying 6-month cost trend at billing scope ($label)..." -ForegroundColor Cyan
+
+    $endDate   = Get-Date -Day 1
+    $startDate = $endDate.AddMonths(-6)
+    $fromStr   = $startDate.ToString('yyyy-MM-dd')
+    $toStr     = (Get-Date).ToString('yyyy-MM-dd')
+
+    $groupedBody = @{
+        type      = 'ActualCost'
+        timeframe = 'Custom'
+        timePeriod = @{
+            from = $fromStr
+            to   = $toStr
+        }
+        dataset   = @{
+            granularity = 'Monthly'
+            aggregation = @{
+                totalCost = @{ name = 'Cost'; function = 'Sum' }
+            }
+            grouping    = @(
+                @{ type = 'Dimension'; name = 'SubscriptionId' }
+            )
+        }
+    } | ConvertTo-Json -Depth 10
+
+    $months         = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $bySubscription = @{}
+
+    # Run the query, following nextLink pagination so the full 6-month window
+    # is returned even when month x subscription exceeds one response page.
+    $allRows = [System.Collections.Generic.List[object]]::new()
+    $cols    = $null
+    $curPath = "$ScopePath/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+    $page    = 0
+    try {
+        while ($curPath -and $page -lt 50) {
+            $page++
+            $resp = Invoke-AzRestMethodWithRetry -Path $curPath -Method POST -Payload $groupedBody
+            if ($resp.StatusCode -ne 200) {
+                Write-Warning "  Billing-scope cost trend returned HTTP $($resp.StatusCode) at $label"
+                if ($allRows.Count -eq 0) {
+                    return [PSCustomObject]@{ Months = @(); BySubscription = @{}; HasData = $false }
+                }
+                break
+            }
+            $r = $resp.Content | ConvertFrom-Json
+            if (-not $cols) { $cols = $r.properties.columns }
+            if ($r.properties.rows) {
+                foreach ($row in $r.properties.rows) { [void]$allRows.Add($row) }
+            }
+            $next = $r.properties.nextLink
+            $curPath = if ($next) { ([uri]$next).PathAndQuery } else { $null }
+        }
+    }
+    catch {
+        Write-Warning "  Billing-scope cost trend query failed: $($_.Exception.Message)"
+        return [PSCustomObject]@{ Months = @(); BySubscription = @{}; HasData = $false }
+    }
+
+    if ($allRows.Count -eq 0) {
+        return [PSCustomObject]@{ Months = @(); BySubscription = @{}; HasData = $false }
+    }
+
+    # Resolve column indexes (EA and MCA share the column names here).
+    $costIdx = -1; $dateIdx = -1; $currIdx = -1; $subIdx = -1
+    if ($cols) {
+        for ($ci = 0; $ci -lt $cols.Count; $ci++) {
+            $n = $cols[$ci].name.ToLower()
+            $t = $cols[$ci].type.ToLower()
+            if ($n -match 'subscriptionid') { $subIdx = $ci }
+            elseif ($n -match 'cost|precost|pretaxcost') { $costIdx = $ci }
+            elseif ($n -match 'billingmonth|usagedate' -or $t -eq 'datetime') { $dateIdx = $ci }
+            elseif ($n -match 'currency|billingcurrency') { $currIdx = $ci }
+            elseif ($t -eq 'number' -and $costIdx -eq -1) { $costIdx = $ci }
+        }
+    }
+    if ($costIdx -eq -1) { $costIdx = 0 }
+    if ($dateIdx -eq -1) { $dateIdx = 1 }
+
+    $agg = @{}
+    foreach ($row in $allRows) {
+        $cost = [math]::Round([double]$row[$costIdx], 2)
+        $dateVal = $row[$dateIdx].ToString()
+        $dateClean = $dateVal -replace '[^0-9\-]', ''
+        $parsed = if ($dateClean.Length -eq 8) {
+            [datetime]::ParseExact($dateClean, 'yyyyMMdd', $null)
+        } else {
+            [datetime]::Parse($dateVal)
+        }
+        $currency = if ($currIdx -ge 0 -and $currIdx -lt $row.Count) { $row[$currIdx] } else { 'USD' }
+        $subId = if ($subIdx -ge 0 -and $subIdx -lt $row.Count) { [string]$row[$subIdx] } else { '' }
+        $key = $parsed.ToString('yyyy-MM')
+
+        if (-not $agg.ContainsKey($key)) { $agg[$key] = @{ Cost = 0; Date = $parsed; Currency = $currency } }
+        $agg[$key].Cost += $cost
+
+        if ($subId) {
+            if (-not $bySubscription.ContainsKey($subId)) {
+                $bySubscription[$subId] = [System.Collections.Generic.List[PSCustomObject]]::new()
+            }
+            [void]$bySubscription[$subId].Add([PSCustomObject]@{
+                Month = $parsed.ToString('MMM yyyy'); MonthDate = $parsed; Cost = $cost; Currency = $currency
+            })
+        }
+    }
+
+    foreach ($k in @($bySubscription.Keys)) {
+        $bySubscription[$k] = @($bySubscription[$k] | Sort-Object MonthDate)
+    }
+    foreach ($entry in $agg.GetEnumerator() | Sort-Object Key) {
+        [void]$months.Add([PSCustomObject]@{
+            Month     = $entry.Value.Date.ToString('MMM yyyy')
+            MonthDate = $entry.Value.Date
+            Cost      = [math]::Round($entry.Value.Cost, 2)
+            Currency  = $entry.Value.Currency
+        })
+    }
+
+    $sorted = @($months | Sort-Object MonthDate)
+    return [PSCustomObject]@{
+        Months         = $sorted
+        BySubscription = $bySubscription
+        HasData        = ($sorted.Count -gt 0)
+    }
+}
+

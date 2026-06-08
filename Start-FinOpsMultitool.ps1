@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.18.3'
+$script:AppVersion = '2.19.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -4902,16 +4902,71 @@ $script:scanStages = @(
                 $trendData = Merge-CostExportData -Results @($trendResults)
                 $exportTrend = ConvertTo-CostTrendFromExport -ExportData $trendData
 
+                $exportMonthCount = if ($exportTrend -and $exportTrend.Months) { @($exportTrend.Months).Count } else { 0 }
+
+                # Is any in-scope export billing- or management-group-scoped?
+                # Those exports cover far more than the selected subscriptions
+                # (a whole billing account / management group), so the live
+                # subscription/MG trend fallback is a scope MISMATCH - it under-
+                # reports massively and can even land on the wrong month. For a
+                # broad-scoped export, a single accurate month from the export
+                # beats a wrong-scope live query.
+                $exportIsBroadScope = @($script:ScanExports | Where-Object { $_.ScopeKind -in @('BillingAccount', 'ManagementGroup') }).Count -gt 0
+
+                # Secondary signal: exports discovered via storage carry
+                # ScopeKind 'Storage', so the kind check above misses a cross-
+                # tenant billing export found only through its blobs. If the
+                # export data spans more subscriptions than the user selected,
+                # the live selected-subs query is a scope mismatch too.
+                if (-not $exportIsBroadScope -and $trendData -and $trendData.ColMap -and $trendData.ColMap.SubscriptionId) {
+                    $distinctSubs = @($trendData.Rows | ForEach-Object { "$($_.$($trendData.ColMap.SubscriptionId))" } | Where-Object { $_ } | Sort-Object -Unique)
+                    $selectedCount = if ($script:scanData.Auth.Subscriptions) { @($script:scanData.Auth.Subscriptions).Count } else { 0 }
+                    if ($distinctSubs.Count -gt [math]::Max(1, $selectedCount)) { $exportIsBroadScope = $true }
+                }
+
                 # A plain Month-to-date Cost Management export only contains the
                 # current billing month, so the export trend collapses to a single
-                # bar. Only FinOps Hub exports re-emit prior months. When fewer than
-                # two months are available, fall back to the live monthly Cost
-                # Management query (one lightweight MG-scope call) so the trend shows
-                # a real 6-month history instead of one flat month.
-                if ($exportTrend -and $exportTrend.HasData -and @($exportTrend.Months).Count -ge 2) {
+                # bar. Only FinOps Hub exports re-emit prior months.
+                if ($exportTrend -and $exportTrend.HasData -and $exportMonthCount -ge 2) {
+                    # Export already carries multi-month history (e.g. FinOps Hub).
                     $script:scanData.CostTrend = $exportTrend
                 }
+                elseif ($exportTrend -and $exportTrend.HasData -and $exportIsBroadScope) {
+                    # Billing/MG-scoped MTD export: only the current month is
+                    # present, but it is accurate at the export's (billing-account-
+                    # wide) scope. Do NOT fall back to the subscription/MG live
+                    # query - it covers a different, much smaller scope and
+                    # produces a misleading bar (e.g. a stray prior month from one
+                    # tiny subscription).
+                    #
+                    # First try a live trend query at the export's own billing /
+                    # management-group scope so we get true org-wide 6-month
+                    # history (works for both EA enrollments and MCA billing
+                    # accounts). If that scope can't be queried (e.g. the export
+                    # was discovered only via storage, so no billing scope path is
+                    # known, or the billing role is missing), fall back to the
+                    # accurate single export month.
+                    $billingScopeExport = @($script:ScanExports |
+                        Where-Object { $_.ScopeKind -in @('BillingAccount', 'ManagementGroup') -and $_.Scope }) |
+                        Select-Object -First 1
+                    $billingTrend = $null
+                    if ($billingScopeExport) {
+                        try {
+                            $billingTrend = Get-CostTrendForScope -ScopePath $billingScopeExport.Scope -ScopeLabel $billingScopeExport.ScopeLabel
+                        }
+                        catch { $billingTrend = $null }
+                    }
+                    if ($billingTrend -and $billingTrend.HasData -and @($billingTrend.Months).Count -ge 1) {
+                        $script:scanData.CostTrend = $billingTrend
+                    }
+                    else {
+                        $script:scanData.CostTrend = $exportTrend
+                    }
+                }
                 else {
+                    # Subscription-scoped MTD export (or no export data): the live
+                    # monthly query is at a comparable scope, so use it to build
+                    # the real 6-month history instead of one flat month.
                     $script:scanData.CostTrend = Get-CostTrend -TenantId $script:scanData.Auth.TenantId -Subscriptions $script:scanData.Auth.Subscriptions -RestrictToSelected:([bool]$script:scanData.Auth.IsSubset)
                 }
             }
