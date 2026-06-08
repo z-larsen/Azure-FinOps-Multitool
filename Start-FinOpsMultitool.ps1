@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.18.2'
+$script:AppVersion = '2.18.3'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
