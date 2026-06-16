@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.20.0'
+$script:AppVersion = '2.20.1'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -5580,6 +5580,7 @@ function Show-AccessCheckDialog {
             catch { $copyBtn.Content = 'Copy failed' }
         }.GetNewClosure())
 
+    $dlg.Content = $root
     $null = $dlg.ShowDialog()
 }
 
