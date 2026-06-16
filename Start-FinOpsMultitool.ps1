@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.19.2'
+$script:AppVersion = '2.20.0'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -605,6 +605,7 @@ if (Test-Path $icoPath) {
 # -- Find Named Controls -----------------------------------------------
 $controls = @(
     'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportScanButton', 'CancelScanButton', 'ExportButton',
+    'CheckAccessButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
     'ContractTypeText', 'ContractDetailText', 'TotalCostText', 'TotalCostDetail',
@@ -5219,6 +5220,26 @@ $script:ScanButton.Add_Click({
         $script:scanTimer.Start()
     })
 
+# -- Check My Access Button (permission preflight) ----------------------
+$script:CheckAccessButton.Add_Click({
+        if (-not $script:scanData.Auth) {
+            [System.Windows.MessageBox]::Show(
+                "Connect to a tenant first (click 'Commercial Tenant' or 'Gov Tenant'), then choose 'Check My Access'.",
+                'No tenant selected', 'OK', 'Information') | Out-Null
+            return
+        }
+        $script:CheckAccessButton.IsEnabled = $false
+        $script:StatusText.Text = 'Checking access (permission preflight)...'
+        try {
+            Show-AccessCheckDialog -Auth $script:scanData.Auth -ParentWindow $window
+            $script:StatusText.Text = 'Access check complete.'
+        }
+        catch {
+            $script:StatusText.Text = "Access check failed: $($_.Exception.Message)"
+        }
+        $script:CheckAccessButton.IsEnabled = $true
+    })
+
 # -- Helper: simple single-select list picker dialog --------------------
 function Show-ListPickerDialog {
     param(
@@ -5281,6 +5302,285 @@ function Show-ListPickerDialog {
         }.GetNewClosure())
     $null = $dlg.ShowDialog()
     return $result.Picked
+}
+
+# -- Access Preflight: probe engine -------------------------------------
+# Runs a small set of cheap, read-only probes that mirror the exact calls the
+# scan makes, so the user learns up front (before a multi-minute scan) which
+# permission planes they hold. Each plane is independent:
+#   - Resource/Advisor scan  -> subscription Reader (ARM)
+#   - Cost (MTD/forecast)     -> Cost Management Reader + (EA) AO view charges
+#   - MACC / commitment       -> billing-account list + lots read (billing role)
+#   - Billing detail tab      -> billingInfo/default sub->account resolution
+# Returns the detected contract type plus one result row per capability.
+function Test-FinOpsAccess {
+    param([Parameter(Mandatory)][object]$Auth)
+
+    $subs = @($Auth.Subscriptions)
+    $firstSub = $subs | Select-Object -First 1
+    $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # -- Detect contract type from subscription quotaId (subscription-scoped,
+    #    so it succeeds even when billing/cost access is fully blocked) -------
+    $contractKey = $null
+    $contractFriendly = 'Unknown'
+    if ($firstSub) {
+        try {
+            $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)?api-version=2022-12-01" -Method GET -MaxRetries 1
+            if ($r -and $r.StatusCode -eq 200) {
+                $quotaId = ($r.Content | ConvertFrom-Json).properties.subscriptionPolicies.quotaId
+                switch -Regex ($quotaId) {
+                    'EnterpriseAgreement' { $contractKey = 'EA'; $contractFriendly = 'Enterprise Agreement (EA)' }
+                    'MCA'                 { $contractKey = 'MCA'; $contractFriendly = 'Microsoft Customer Agreement (MCA)' }
+                    'CSP'                 { $contractKey = 'MPA'; $contractFriendly = 'CSP / Partner Agreement (MPA)' }
+                    'PayAsYouGo|PAYG|MSAZR|MSDN|MCSFree|Visual|FreeTrial|Sponsored' { $contractKey = 'MOSP'; $contractFriendly = 'Pay-As-You-Go / MOSP' }
+                    default { $contractKey = $null; $contractFriendly = if ($quotaId) { "$quotaId" } else { 'Unknown' } }
+                }
+            }
+        }
+        catch { }
+    }
+
+    $model = Get-FinOpsPermissionModel
+    # Role text for a capability, preferring the detected contract type and
+    # falling back to the Common guidance when the type is unknown.
+    $roleText = {
+        param($capKey)
+        $cap = $model.Capabilities | Where-Object { $_.Key -eq $capKey } | Select-Object -First 1
+        if (-not $cap) { return '' }
+        if ($contractKey -and $cap.Roles.Contains($contractKey)) { return $cap.Roles[$contractKey] }
+        if ($cap.Roles.Contains('Common')) { return $cap.Roles['Common'] }
+        return ''
+    }
+
+    # -- Probe 1: Resource & Advisor scan (subscription Reader) -------------
+    $coreStatus = 'Unknown'; $coreDetail = 'Could not determine.'
+    if ($firstSub) {
+        try {
+            $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)/resourcegroups?api-version=2021-04-01&`$top=1" -Method GET -MaxRetries 1
+            if ($r -and $r.StatusCode -eq 200) { $coreStatus = 'OK'; $coreDetail = 'Reader confirmed on at least one subscription.' }
+            elseif ($r -and ($r.StatusCode -eq 401 -or $r.StatusCode -eq 403)) { $coreStatus = 'Blocked'; $coreDetail = 'Reader role missing on the subscription.' }
+            else { $coreStatus = 'Unknown'; $coreDetail = "Unexpected response (HTTP $($r.StatusCode))." }
+        }
+        catch { $coreStatus = 'Unknown'; $coreDetail = 'Probe failed.' }
+    }
+    [void]$rows.Add([PSCustomObject]@{
+            Name = 'Resource & Advisor scan'; Status = $coreStatus
+            Detail = $coreDetail; Roles = (& $roleText 'Core')
+        })
+
+    # -- Probe 2: Cost data (MTD / forecast) -------------------------------
+    $costStatus = 'Unknown'; $costDetail = 'Could not determine.'
+    if ($firstSub) {
+        $probeBody = @{
+            type = 'ActualCost'; timeframe = 'MonthToDate'
+            dataset = @{ granularity = 'None'; aggregation = @{ totalCost = @{ name = 'Cost'; function = 'Sum' } } }
+        } | ConvertTo-Json -Depth 10
+        try {
+            $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01" -Method POST -Payload $probeBody -MaxRetries 1
+            if ($r -and $r.StatusCode -eq 200) { $costStatus = 'OK'; $costDetail = 'Cost Management query returned data.' }
+            elseif ($r -and ($r.StatusCode -eq 401 -or $r.StatusCode -eq 403)) {
+                $costStatus = 'Blocked'
+                $msg = ''
+                try { $msg = ($r.Content | ConvertFrom-Json).error.message } catch { $msg = '' }
+                if ($contractKey -eq 'EA' -or $r.StatusCode -eq 401 -or $msg -match 'AO View Charges|account owner|enrollment') {
+                    $costDetail = "EA: an Enterprise Administrator must turn on 'Account owners can view charges' (AO view charges), plus you need Cost Management Reader."
+                }
+                else {
+                    $costDetail = 'Cost Management Reader (or billing-profile cost role for MCA) is missing.'
+                }
+            }
+            else { $costStatus = 'Unknown'; $costDetail = "Unexpected response (HTTP $($r.StatusCode))." }
+        }
+        catch { $costStatus = 'Unknown'; $costDetail = 'Probe failed.' }
+    }
+    [void]$rows.Add([PSCustomObject]@{
+            Name = 'Cost data (month-to-date & forecast)'; Status = $costStatus
+            Detail = $costDetail; Roles = (& $roleText 'Core')
+        })
+
+    # -- Probe 3: MACC / commitment (billing-account list + lots) ----------
+    # The MACC reader lists billing accounts then reads lots. A non-empty
+    # billing-account list is the gateway, so we probe that.
+    $maccStatus = 'Unknown'; $maccDetail = 'Could not determine.'
+    if ($contractKey -eq 'MOSP') {
+        $maccStatus = 'NA'; $maccDetail = 'Not applicable - MACC is an EA/MCA construct.'
+    }
+    else {
+        try {
+            $r = Invoke-AzRestMethodWithRetry -Path '/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01' -Method GET -MaxRetries 1
+            if ($r -and $r.StatusCode -eq 200) {
+                $val = @(($r.Content | ConvertFrom-Json).value)
+                if ($val.Count -gt 0) { $maccStatus = 'OK'; $maccDetail = "Billing account list returned $($val.Count) account(s); MACC/lots readable." }
+                else { $maccStatus = 'Blocked'; $maccDetail = 'No billing accounts visible - a billing role is required.' }
+            }
+            elseif ($r -and ($r.StatusCode -eq 401 -or $r.StatusCode -eq 403)) { $maccStatus = 'Blocked'; $maccDetail = 'Billing-account access denied - a billing role is required.' }
+            else { $maccStatus = 'Unknown'; $maccDetail = "Unexpected response (HTTP $($r.StatusCode))." }
+        }
+        catch { $maccStatus = 'Unknown'; $maccDetail = 'Probe failed.' }
+    }
+    [void]$rows.Add([PSCustomObject]@{
+            Name = 'MACC / commitment consumption'; Status = $maccStatus
+            Detail = $maccDetail; Roles = (& $roleText 'MACC')
+        })
+
+    # -- Probe 4: Billing detail tab (sub -> billing-account resolution) ----
+    # The Billing tab needs billingInfo/default to resolve each subscription to
+    # its billing account. This can be denied even when the MACC list succeeds,
+    # which is exactly how a user sees MACC data but an empty Billing tab.
+    $billStatus = 'Unknown'; $billDetail = 'Could not determine.'
+    if ($firstSub) {
+        try {
+            $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)/providers/Microsoft.Billing/billingInfo/default?api-version=2024-04-01" -Method GET -MaxRetries 1
+            if ($r -and $r.StatusCode -eq 200) { $billStatus = 'OK'; $billDetail = 'Subscription resolves to its billing account; billing tab will populate.' }
+            elseif ($r -and ($r.StatusCode -eq 401 -or $r.StatusCode -eq 403)) { $billStatus = 'Blocked'; $billDetail = 'Billing detail (accounts/profiles/invoice sections) requires a billing role at the account scope.' }
+            else { $billStatus = 'Unknown'; $billDetail = "Unexpected response (HTTP $($r.StatusCode))." }
+        }
+        catch { $billStatus = 'Unknown'; $billDetail = 'Probe failed.' }
+    }
+    [void]$rows.Add([PSCustomObject]@{
+            Name = 'Billing accounts / profiles tab'; Status = $billStatus
+            Detail = $billDetail; Roles = (& $roleText 'MACC')
+        })
+
+    # -- Exports row (informational; verified at Export Scan time) ----------
+    [void]$rows.Add([PSCustomObject]@{
+            Name = 'Cost Management exports (fast path)'; Status = 'Info'
+            Detail = 'Reading export blobs needs Storage Blob Data Reader on the export storage account. Verified when you run a Cost Export Scan.'
+            Roles = (& $roleText 'Exports')
+        })
+
+    [PSCustomObject]@{
+        ContractKey      = $contractKey
+        ContractFriendly = $contractFriendly
+        Rows             = $rows
+        Reference        = $model.Reference
+    }
+}
+
+# -- Access Preflight: checklist dialog ---------------------------------
+function Show-AccessCheckDialog {
+    param([Parameter(Mandatory)][object]$Auth, [System.Windows.Window]$ParentWindow)
+
+    $prev = $null
+    if ($ParentWindow) { $prev = $ParentWindow.Cursor; $ParentWindow.Cursor = [System.Windows.Input.Cursors]::Wait }
+    try { $check = Test-FinOpsAccess -Auth $Auth }
+    finally { if ($ParentWindow) { $ParentWindow.Cursor = $prev } }
+
+    $statusColors = @{
+        'OK'      = '#107C10'
+        'Blocked' = '#D83B01'
+        'Partial' = '#CA5010'
+        'Unknown' = '#605E5C'
+        'NA'      = '#605E5C'
+        'Info'    = '#0078D4'
+    }
+    $statusGlyph = @{
+        'OK' = 'OK'; 'Blocked' = 'X'; 'Partial' = '!'; 'Unknown' = '?'; 'NA' = '-'; 'Info' = 'i'
+    }
+    # Shared brushes (raw color strings do not reliably convert to Brush at
+    # runtime in PS 5.1; the BrushConverter pattern is used throughout).
+    $brMuted = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#605E5C')
+    $brDark = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#323130')
+    $brWhite = [System.Windows.Media.BrushConverter]::new().ConvertFromString('White')
+    $brBorder = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#E1DFDD')
+
+    $dlg = [System.Windows.Window]@{
+        Title = 'Check My Access - permission preflight'; Width = 720; Height = 560
+        WindowStartupLocation = 'CenterOwner'; ResizeMode = 'CanResize'
+    }
+    if ($ParentWindow) { $dlg.Owner = $ParentWindow }
+
+    $root = [System.Windows.Controls.Grid]@{ Margin = '16' }
+    1..3 | ForEach-Object { [void]$root.RowDefinitions.Add([System.Windows.Controls.RowDefinition]@{ Height = 'Auto' }) }
+    $root.RowDefinitions[1].Height = [System.Windows.GridLength]::new(1, 'Star')
+
+    # Header
+    $header = [System.Windows.Controls.StackPanel]@{ Margin = '0,0,0,12' }
+    [void]$header.Children.Add([System.Windows.Controls.TextBlock]@{
+            Text = "Detected contract type: $($check.ContractFriendly)"; FontSize = 15; FontWeight = 'Bold'
+        })
+    [void]$header.Children.Add([System.Windows.Controls.TextBlock]@{
+            Text = 'Each capability below is an independent permission plane. A green item works; a red item needs the listed role assigned to your account, at the listed scope.'
+            FontSize = 12; Foreground = $brMuted; TextWrapping = 'Wrap'; Margin = '0,4,0,0'
+        })
+    [System.Windows.Controls.Grid]::SetRow($header, 0); [void]$root.Children.Add($header)
+
+    # Rows
+    $scroll = [System.Windows.Controls.ScrollViewer]@{ VerticalScrollBarVisibility = 'Auto' }
+    $list = [System.Windows.Controls.StackPanel]@{}
+    foreach ($row in $check.Rows) {
+        $color = $statusColors[$row.Status]; if (-not $color) { $color = '#605E5C' }
+        $brush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($color)
+
+        $card = [System.Windows.Controls.Border]@{
+            BorderBrush = $brBorder
+            BorderThickness = '1'; CornerRadius = '4'; Padding = '12'; Margin = '0,0,0,8'
+        }
+        $cg = [System.Windows.Controls.Grid]@{}
+        [void]$cg.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]@{ Width = '54' })
+        [void]$cg.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]@{ Width = [System.Windows.GridLength]::new(1, 'Star') })
+
+        $pill = [System.Windows.Controls.Border]@{
+            Background = $brush; CornerRadius = '3'; Height = 24; MinWidth = 40
+            VerticalAlignment = 'Top'; HorizontalAlignment = 'Left'; Padding = '6,2'
+        }
+        $glyph = $statusGlyph[$row.Status]; if (-not $glyph) { $glyph = '?' }
+        $pill.Child = [System.Windows.Controls.TextBlock]@{
+            Text = $glyph; Foreground = $brWhite; FontWeight = 'Bold'; FontSize = 12
+            HorizontalAlignment = 'Center'; VerticalAlignment = 'Center'
+        }
+        [System.Windows.Controls.Grid]::SetColumn($pill, 0); [void]$cg.Children.Add($pill)
+
+        $txt = [System.Windows.Controls.StackPanel]@{}
+        [void]$txt.Children.Add([System.Windows.Controls.TextBlock]@{ Text = $row.Name; FontWeight = 'Bold'; FontSize = 13; TextWrapping = 'Wrap' })
+        [void]$txt.Children.Add([System.Windows.Controls.TextBlock]@{ Text = $row.Detail; FontSize = 12; Foreground = $brDark; TextWrapping = 'Wrap'; Margin = '0,3,0,0' })
+        if (($row.Status -eq 'Blocked' -or $row.Status -eq 'Partial') -and $row.Roles) {
+            [void]$txt.Children.Add([System.Windows.Controls.TextBlock]@{ Text = "Needs: $($row.Roles)"; FontSize = 11; Foreground = $brush; TextWrapping = 'Wrap'; Margin = '0,4,0,0' })
+        }
+        [System.Windows.Controls.Grid]::SetColumn($txt, 1); [void]$cg.Children.Add($txt)
+        $card.Child = $cg
+        [void]$list.Children.Add($card)
+    }
+    $scroll.Content = $list
+    [System.Windows.Controls.Grid]::SetRow($scroll, 1); [void]$root.Children.Add($scroll)
+
+    # Buttons
+    $btnPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal'; HorizontalAlignment = 'Right'; Margin = '0,12,0,0' }
+    $copyBtn = [System.Windows.Controls.Button]@{ Content = 'Copy access request'; Width = 170; Margin = '0,0,8,0' }
+    $closeBtn = [System.Windows.Controls.Button]@{ Content = 'Close'; Width = 90; IsCancel = $true; IsDefault = $true }
+    [void]$btnPanel.Children.Add($copyBtn); [void]$btnPanel.Children.Add($closeBtn)
+    [System.Windows.Controls.Grid]::SetRow($btnPanel, 2); [void]$root.Children.Add($btnPanel)
+
+    # Build the copy text once; closure captures it by reference via hashtable.
+    $blocked = @($check.Rows | Where-Object { $_.Status -eq 'Blocked' -or $_.Status -eq 'Partial' })
+    $ctx = @{ Check = $check; Blocked = $blocked }
+    $copyBtn.Add_Click({
+            $c = $ctx.Check
+            $sb = [System.Text.StringBuilder]::new()
+            [void]$sb.AppendLine("Azure FinOps Multitool - access request")
+            [void]$sb.AppendLine("Account: $($Auth.AccountName)")
+            [void]$sb.AppendLine("Tenant: $($Auth.TenantId)")
+            [void]$sb.AppendLine("Contract type: $($c.ContractFriendly)")
+            [void]$sb.AppendLine("")
+            if ($ctx.Blocked.Count -eq 0) {
+                [void]$sb.AppendLine("All probed permission planes are accessible. No additional roles required.")
+            }
+            else {
+                [void]$sb.AppendLine("Please assign the following so I can run a complete FinOps scan:")
+                [void]$sb.AppendLine("")
+                foreach ($b in $ctx.Blocked) {
+                    [void]$sb.AppendLine("- $($b.Name)")
+                    [void]$sb.AppendLine("    Needs: $($b.Roles)")
+                }
+            }
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("Reference: $($c.Reference)")
+            try { [System.Windows.Clipboard]::SetText($sb.ToString()); $copyBtn.Content = 'Copied!' }
+            catch { $copyBtn.Content = 'Copy failed' }
+        }.GetNewClosure())
+
+    $null = $dlg.ShowDialog()
 }
 
 # -- Cost Export Scan Button --------------------------------------------

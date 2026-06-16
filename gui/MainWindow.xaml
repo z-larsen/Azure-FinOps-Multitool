@@ -128,6 +128,9 @@
                             Background="Transparent" Foreground="White" BorderBrush="White" Margin="0,0,8,0"/>
                     <Button x:Name="GovTenantButton" Content="&#x1F513; Gov Tenant" Style="{StaticResource AzureButton}"
                             Background="Transparent" Foreground="White" BorderBrush="#8DC6FF" Margin="0,0,8,0"/>
+                    <Button x:Name="CheckAccessButton" Content="&#x1F50E; Check My Access" Style="{StaticResource AzureButton}"
+                            Background="Transparent" Foreground="White" BorderBrush="#8DC6FF" Margin="0,0,8,0"
+                            ToolTip="Runs a quick permission preflight for your account and contract type &#x2014; shows exactly which roles you need before a full scan."/>
                     <Button x:Name="ScanButton" Content="&#x26A1; Live Scan" Style="{StaticResource AzureButton}"
                             Background="White" Foreground="#0078D4" Margin="0,0,8,0"
                             ToolTip="Slower but live &#x2014; queries the Azure Cost Management API directly for real-time spend. Subject to throttling on large tenants."/>
