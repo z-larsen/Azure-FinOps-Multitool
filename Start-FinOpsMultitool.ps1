@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.19.1'
+$script:AppVersion = '2.19.2'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -607,8 +607,8 @@ $controls = @(
     'TenantLabel', 'VersionLabel', 'TenantButton', 'GovTenantButton', 'ScanButton', 'ExportScanButton', 'CancelScanButton', 'ExportButton',
     'ProgressBar', 'StatusText', 'HierarchyTree', 'DetailTabs',
     # Overview
-    'ContractTypeText', 'ContractDetailText', 'TotalCostText',
-    'ForecastText', 'SubCountText', 'TotalSavingsText', 'TotalSavingsDetail', 'SubCostGrid',
+    'ContractTypeText', 'ContractDetailText', 'TotalCostText', 'TotalCostDetail',
+    'ForecastText', 'ForecastDetail', 'SubCountText', 'TotalSavingsText', 'TotalSavingsDetail', 'SubCostGrid',
     'CostAccessWarning', 'CostAccessWarningText',
     'ResourceCostGrid',
     'ResourceCountNote',
@@ -877,8 +877,30 @@ function Populate-OverviewTab {
             $currency = $entry.Value.Currency
         }
     }
-    $script:TotalCostText.Text = "$(Get-CurrencySymbol $currency)$($totalActual.ToString('N2'))"
-    $script:ForecastText.Text = "$(Get-CurrencySymbol $currency)$($totalForecast.ToString('N2'))"
+
+    # When cost data is fully blocked by permissions (export blob denied or
+    # EA/MCA cost access disabled), spend- and savings-derived tiles cannot be
+    # trusted. Blank them with a permission note instead of showing misleading
+    # numbers (e.g. forecast mirroring MTD, or huge retail-rate savings with no
+    # spend baseline). Partial per-sub denial keeps real values from accessible subs.
+    $costBlocked = [bool]($script:exportCostIssue -or $script:costAccessIssue)
+    $blockBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D83B01')
+    $mutedBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#999')
+
+    if ($costBlocked) {
+        $script:TotalCostText.Text = [char]0x2014
+        $script:TotalCostDetail.Text = 'Requires cost data access'
+        $script:TotalCostDetail.Foreground = $blockBrush
+        $script:ForecastText.Text = [char]0x2014
+        $script:ForecastDetail.Text = 'Requires cost data access'
+        $script:ForecastDetail.Foreground = $blockBrush
+    }
+    else {
+        $script:TotalCostText.Text = "$(Get-CurrencySymbol $currency)$($totalActual.ToString('N2'))"
+        $script:TotalCostDetail.Text = ''
+        $script:ForecastText.Text = "$(Get-CurrencySymbol $currency)$($totalForecast.ToString('N2'))"
+        $script:ForecastDetail.Text = ''
+    }
 
     # Total savings (deduplicated: keep only highest-savings rec per resource)
     $allSavingsRecs = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -900,18 +922,34 @@ function Populate-OverviewTab {
     }
 
     $sym = Get-CurrencySymbol $currency
-    $script:TotalSavingsText.Text = "$sym$($totalSavings.ToString('N2'))/yr"
-    # Show tooltip with raw vs deduped if there's overlap
-    if ($rawTotal -gt 0 -and [math]::Abs($rawTotal - $totalSavings) -gt 1) {
-        $script:TotalSavingsText.ToolTip = "Raw total: $sym$($rawTotal.ToString('N2'))/yr (before removing overlapping recommendations for the same resource)"
-        $script:TotalSavingsDetail.Text = "Deduplicated per resource"
-    } else {
-        $script:TotalSavingsDetail.Text = "Based on Advisor recommendations"
+    if ($costBlocked) {
+        # Advisor savings come through without cost access, but without a spend
+        # baseline they are misleading (retail-rate estimates only). Suppress.
+        $script:TotalSavingsText.Text = [char]0x2014
+        $script:TotalSavingsDetail.Text = 'Requires cost data access'
+        $script:TotalSavingsDetail.Foreground = $blockBrush
+    }
+    else {
+        $script:TotalSavingsText.Text = "$sym$($totalSavings.ToString('N2'))/yr"
+        $script:TotalSavingsDetail.Foreground = $mutedBrush
+        # Show tooltip with raw vs deduped if there's overlap
+        if ($rawTotal -gt 0 -and [math]::Abs($rawTotal - $totalSavings) -gt 1) {
+            $script:TotalSavingsText.ToolTip = "Raw total: $sym$($rawTotal.ToString('N2'))/yr (before removing overlapping recommendations for the same resource)"
+            $script:TotalSavingsDetail.Text = "Deduplicated per resource"
+        } else {
+            $script:TotalSavingsDetail.Text = "Based on Advisor recommendations"
+        }
     }
 
     # Savings Realized card
-    if ($d.Savings) {
+    if ($costBlocked) {
+        $script:SavingsRealizedText.Text = [char]0x2014
+        $script:SavingsRealizedDetail.Text = 'Requires cost data access'
+        $script:SavingsRealizedDetail.Foreground = $blockBrush
+    }
+    elseif ($d.Savings) {
         $sym = Get-CurrencySymbol $currency
+        $script:SavingsRealizedDetail.Foreground = $mutedBrush
         $script:SavingsRealizedText.Text = "$sym$($d.Savings.TotalMonthly.ToString('N2'))/mo"
         $parts = @()
         if ($d.Savings.RISavingsMonthly -gt 0) { $parts += "RI: $sym$($d.Savings.RISavingsMonthly.ToString('N0'))" }
