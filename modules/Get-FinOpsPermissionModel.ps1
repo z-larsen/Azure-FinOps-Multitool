@@ -1,4 +1,4 @@
-###########################################################################
+﻿###########################################################################
 # GET-FINOPSPERMISSIONMODEL.PS1
 # AZURE FINOPS MULTITOOL - Required Permissions Model
 ###########################################################################
@@ -150,5 +150,5 @@ function Get-FinOpsPermissionMessage {
         }
     }
 
-    "$($cap.Name) could not be read due to insufficient permissions (the API returned access denied, not empty results). Required roles by contract type — $([string]::Join(' ', $parts)) Ask a billing or subscription admin to assign the role that matches your agreement, then re-scan. Reference: $($model.Reference)"
+    "$($cap.Name) could not be read due to insufficient permissions (the API returned access denied, not empty results). Required roles by contract type - $([string]::Join(' ', $parts)) Ask a billing or subscription admin to assign the role that matches your agreement, then re-scan. Reference: $($model.Reference)"
 }
