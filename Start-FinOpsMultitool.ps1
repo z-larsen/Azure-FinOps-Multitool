@@ -547,7 +547,7 @@ function Search-AzGraphSafe {
 }
 
 # -- Version -----------------------------------------------------------
-$script:AppVersion = '2.20.1'
+$script:AppVersion = '2.20.2'
 
 # -- Dot-Source Modules -------------------------------------------------
 $script:ScriptRootDir = $PSScriptRoot
@@ -5311,7 +5311,9 @@ function Show-ListPickerDialog {
 #   - Resource/Advisor scan  -> subscription Reader (ARM)
 #   - Cost (MTD/forecast)     -> Cost Management Reader + (EA) AO view charges
 #   - MACC / commitment       -> billing-account list + lots read (billing role)
-#   - Billing detail tab      -> billingInfo/default sub->account resolution
+#   - Billing detail tab      -> billingProperty/default sub->account resolution,
+#                                then the resolved account must be in the list
+#                                the user can actually read.
 # Returns the detected contract type plus one result row per capability.
 function Test-FinOpsAccess {
     param([Parameter(Mandatory)][object]$Auth)
@@ -5319,29 +5321,52 @@ function Test-FinOpsAccess {
     $subs = @($Auth.Subscriptions)
     $firstSub = $subs | Select-Object -First 1
     $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $model = Get-FinOpsPermissionModel
 
-    # -- Detect contract type from subscription quotaId (subscription-scoped,
-    #    so it succeeds even when billing/cost access is fully blocked) -------
+    # -- Detect contract type ---------------------------------------------
+    # Primary signal: the agreementType on the billing accounts the user can
+    # read (reliable, and reused by the MACC + Billing probes below). Fallback:
+    # subscription quotaId. The subscription GET can return 400 in some Az
+    # versions, so it is best-effort only.
     $contractKey = $null
     $contractFriendly = 'Unknown'
-    if ($firstSub) {
+
+    # Billing-account list (one call, reused for contract type, MACC, Billing).
+    $baList = $null; $baStatus = $null; $baNames = @{}
+    try {
+        $r = Invoke-AzRestMethodWithRetry -Path '/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01' -Method GET -MaxRetries 1
+        $baStatus = if ($r) { $r.StatusCode } else { $null }
+        if ($r -and $r.StatusCode -eq 200) {
+            $baList = @(($r.Content | ConvertFrom-Json).value)
+            foreach ($ba in $baList) { if ($ba.name) { $baNames[[string]$ba.name] = $true } }
+            $agree = ($baList | Where-Object { $_.properties.agreementType } | Select-Object -First 1).properties.agreementType
+            switch ($agree) {
+                'EnterpriseAgreement'        { $contractKey = 'EA';   $contractFriendly = 'Enterprise Agreement (EA)' }
+                'MicrosoftCustomerAgreement' { $contractKey = 'MCA';  $contractFriendly = 'Microsoft Customer Agreement (MCA)' }
+                'MicrosoftPartnerAgreement'  { $contractKey = 'MPA';  $contractFriendly = 'CSP / Partner Agreement (MPA)' }
+            }
+        }
+    }
+    catch { }
+
+    # Fallback: subscription quotaId (best-effort; may 400 on some Az versions).
+    if (-not $contractKey -and $firstSub) {
         try {
             $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)?api-version=2022-12-01" -Method GET -MaxRetries 1
             if ($r -and $r.StatusCode -eq 200) {
-                $quotaId = ($r.Content | ConvertFrom-Json).properties.subscriptionPolicies.quotaId
+                $quotaId = ($r.Content | ConvertFrom-Json).subscriptionPolicies.quotaId
                 switch -Regex ($quotaId) {
                     'EnterpriseAgreement' { $contractKey = 'EA'; $contractFriendly = 'Enterprise Agreement (EA)' }
                     'MCA'                 { $contractKey = 'MCA'; $contractFriendly = 'Microsoft Customer Agreement (MCA)' }
                     'CSP'                 { $contractKey = 'MPA'; $contractFriendly = 'CSP / Partner Agreement (MPA)' }
                     'PayAsYouGo|PAYG|MSAZR|MSDN|MCSFree|Visual|FreeTrial|Sponsored' { $contractKey = 'MOSP'; $contractFriendly = 'Pay-As-You-Go / MOSP' }
-                    default { $contractKey = $null; $contractFriendly = if ($quotaId) { "$quotaId" } else { 'Unknown' } }
+                    default { if ($quotaId) { $contractFriendly = "$quotaId" } }
                 }
             }
         }
         catch { }
     }
 
-    $model = Get-FinOpsPermissionModel
     # Role text for a capability, preferring the detected contract type and
     # falling back to the Common guidance when the type is unknown.
     $roleText = {
@@ -5399,40 +5424,50 @@ function Test-FinOpsAccess {
             Detail = $costDetail; Roles = (& $roleText 'Core')
         })
 
-    # -- Probe 3: MACC / commitment (billing-account list + lots) ----------
+    # -- Probe 3: MACC / commitment (uses the billing-account list above) ---
     # The MACC reader lists billing accounts then reads lots. A non-empty
-    # billing-account list is the gateway, so we probe that.
+    # billing-account list is the gateway.
     $maccStatus = 'Unknown'; $maccDetail = 'Could not determine.'
     if ($contractKey -eq 'MOSP') {
         $maccStatus = 'NA'; $maccDetail = 'Not applicable - MACC is an EA/MCA construct.'
     }
-    else {
-        try {
-            $r = Invoke-AzRestMethodWithRetry -Path '/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01' -Method GET -MaxRetries 1
-            if ($r -and $r.StatusCode -eq 200) {
-                $val = @(($r.Content | ConvertFrom-Json).value)
-                if ($val.Count -gt 0) { $maccStatus = 'OK'; $maccDetail = "Billing account list returned $($val.Count) account(s); MACC/lots readable." }
-                else { $maccStatus = 'Blocked'; $maccDetail = 'No billing accounts visible - a billing role is required.' }
-            }
-            elseif ($r -and ($r.StatusCode -eq 401 -or $r.StatusCode -eq 403)) { $maccStatus = 'Blocked'; $maccDetail = 'Billing-account access denied - a billing role is required.' }
-            else { $maccStatus = 'Unknown'; $maccDetail = "Unexpected response (HTTP $($r.StatusCode))." }
-        }
-        catch { $maccStatus = 'Unknown'; $maccDetail = 'Probe failed.' }
+    elseif ($baStatus -eq 200) {
+        if ($baNames.Count -gt 0) { $maccStatus = 'OK'; $maccDetail = "Billing account list returned $($baNames.Count) account(s); MACC/lots readable." }
+        else { $maccStatus = 'Blocked'; $maccDetail = 'No billing accounts visible - a billing role is required.' }
     }
+    elseif ($baStatus -eq 401 -or $baStatus -eq 403) { $maccStatus = 'Blocked'; $maccDetail = 'Billing-account access denied - a billing role is required.' }
+    else { $maccStatus = 'Unknown'; $maccDetail = "Unexpected response (HTTP $baStatus)." }
     [void]$rows.Add([PSCustomObject]@{
             Name = 'MACC / commitment consumption'; Status = $maccStatus
             Detail = $maccDetail; Roles = (& $roleText 'MACC')
         })
 
     # -- Probe 4: Billing detail tab (sub -> billing-account resolution) ----
-    # The Billing tab needs billingInfo/default to resolve each subscription to
-    # its billing account. This can be denied even when the MACC list succeeds,
-    # which is exactly how a user sees MACC data but an empty Billing tab.
+    # The Billing tab resolves each subscription to its billing account via
+    # billingProperty/default, then shows that account's structure. Two gates:
+    #   (a) can we resolve the sub's billing account id?
+    #   (b) is that account in the list we can actually read (Probe 3)?
+    # A user can pass (a) but fail (b) - they see their account id but lack a
+    # billing role on it - which is exactly how MACC (reads the list) succeeds
+    # while the Billing tab stays empty.
     $billStatus = 'Unknown'; $billDetail = 'Could not determine.'
     if ($firstSub) {
         try {
-            $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)/providers/Microsoft.Billing/billingInfo/default?api-version=2024-04-01" -Method GET -MaxRetries 1
-            if ($r -and $r.StatusCode -eq 200) { $billStatus = 'OK'; $billDetail = 'Subscription resolves to its billing account; billing tab will populate.' }
+            $r = Invoke-AzRestMethodWithRetry -Path "/subscriptions/$($firstSub.Id)/providers/Microsoft.Billing/billingProperty/default?api-version=2024-04-01" -Method GET -MaxRetries 1
+            if ($r -and $r.StatusCode -eq 200) {
+                $baId = ($r.Content | ConvertFrom-Json).properties.billingAccountId
+                $subBaName = if ($baId) { ($baId -replace '(?i).*/billingAccounts/', '').Trim('/') } else { '' }
+                if ($subBaName -and $baNames.ContainsKey($subBaName)) {
+                    $billStatus = 'OK'; $billDetail = 'Subscription resolves to a billing account you can read; the Billing tab will populate.'
+                }
+                elseif ($subBaName) {
+                    $billStatus = 'Blocked'
+                    $billDetail = "Your subscription's billing account ($subBaName) is not one you can read. You can see MACC from another accessible account, but the Billing tab needs a billing role on THIS account."
+                }
+                else {
+                    $billStatus = 'Unknown'; $billDetail = 'Billing account id could not be resolved for this subscription.'
+                }
+            }
             elseif ($r -and ($r.StatusCode -eq 401 -or $r.StatusCode -eq 403)) { $billStatus = 'Blocked'; $billDetail = 'Billing detail (accounts/profiles/invoice sections) requires a billing role at the account scope.' }
             else { $billStatus = 'Unknown'; $billDetail = "Unexpected response (HTTP $($r.StatusCode))." }
         }

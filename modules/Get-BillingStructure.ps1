@@ -27,7 +27,7 @@ function Get-BillingStructure {
     if ($Subscriptions) {
         foreach ($sub in $Subscriptions) {
             try {
-                $biPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Billing/billingInfo/default?api-version=2024-04-01"
+                $biPath = "/subscriptions/$($sub.Id)/providers/Microsoft.Billing/billingProperty/default?api-version=2024-04-01"
                 $biResp = Invoke-AzRestMethodWithRetry -Path $biPath -Method GET
                 if ($biResp.StatusCode -eq 200) {
                     $biResult = ($biResp.Content | ConvertFrom-Json)
